@@ -125,12 +125,35 @@ PBKDF2(SHA-256, 210,000回)で鍵を導出し、AES-256-GCMで暗号化した状
 平文がサーバーやリポジトリに残ることはありません。パスワードはある程度の
 強度のものを使ってください。
 
+## 毎日の自動実行(launchd)
+
+毎朝9時に `screen.py`(デフォルトの5銘柄ユニバース)→ `sync_report.py` →
+`git add docs/ && git commit && git push` を自動実行するlaunchd設定です。
+Macがその時刻にスリープ/シャットダウン中の場合は実行されません。
+
+```bash
+# 導入(初回のみ)
+cp com.stock-selector.dailyrun.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.stock-selector.dailyrun.plist
+
+# 状態確認・手動実行・停止
+launchctl list | grep stock-selector
+bash daily_run.sh                    # 手動で今すぐ実行
+launchctl unload ~/Library/LaunchAgents/com.stock-selector.dailyrun.plist  # 停止
+```
+
+ログは `logs/daily_run.log` / `logs/daily_run.err.log` に出力されます(gitignore対象)。
+`ANTHROPIC_API_KEY`を`.env`に設定していない場合、Fable 5の総合コメントは省略され
+スコアリング結果のみが記録されます。
+
 ## 構成
 
 ```
 stock-selector/
   screen.py                    # エントリーポイント
   sync_report.py               # output/のレポートを暗号化してdocs/に同期
+  daily_run.sh                 # 毎日の自動実行スクリプト(screen→sync→push)
+  com.stock-selector.dailyrun.plist  # ↑用のlaunchd設定
   forward_test.py              # スコアの事後検証(フォワードテスト)集計
   src/data/
     jquants_client.py          # JP株データ取得
