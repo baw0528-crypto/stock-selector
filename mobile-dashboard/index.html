@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>stock-selector レポート</title>
+<meta name="theme-color" content="#1f4f4b" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="stock-selector" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<div id="login-view" class="view hidden">
+  <div class="login-card">
+    <div class="app-icon"><img src="icons/icon-192.png" alt="" /></div>
+    <h1>stock-selector</h1>
+    <p class="lead">レポートを閲覧するにはパスワードを入力してください。</p>
+    <form id="login-form">
+      <input
+        type="password"
+        id="password-input"
+        placeholder="パスワード"
+        autocomplete="current-password"
+        required
+      />
+      <label class="remember">
+        <input type="checkbox" id="remember-device" />
+        この端末を記憶する
+      </label>
+      <button type="submit" id="login-submit">開く</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+    <p class="note">発注機能はありません。表示専用のレポートビューアです。</p>
+  </div>
+</div>
+
+<div id="app-view" class="view hidden">
+  <div id="list-view" class="view">
+    <header class="app-bar">
+      <span class="app-title">レポート</span>
+      <button id="logout-button" class="text-button">ロック</button>
+    </header>
+    <div id="report-list" class="report-list"></div>
+  </div>
+
+  <div id="detail-view" class="view hidden">
+    <header class="app-bar">
+      <a href="#/" class="back">&lsaquo; 一覧</a>
+      <span id="detail-title" class="app-title"></span>
+      <span></span>
+    </header>
+    <div id="detail-body" class="detail-body"></div>
+  </div>
+</div>
+
+<script src="js/crypto.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

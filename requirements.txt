@@ -1,0 +1,12 @@
+requests>=2.31.0
+pandas>=2.1.0
+numpy>=1.26.0
+yfinance>=0.2.40
+feedparser>=6.0.11
+lxml>=5.0.0  # pd.read_html (S&P 500構成銘柄リスト取得) 用
+python-dotenv>=1.0.1
+anthropic>=0.40.0
+cryptography>=42.0.0  # sync_report.py でのレポート暗号化(mobile-dashboard用)
+
+# 開発用(テスト実行のみ、本番運用には不要)
+pytest>=8.0.0
