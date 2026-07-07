@@ -98,34 +98,39 @@ python -m pytest
 「今日の日本株をスクリーニングして」のような自然言語指示で `screen.py` を
 適切な引数で実行できるようになります。詳細は SKILL.md を参照してください。
 
-## モバイルでレポートを見る(mobile-dashboard)
+## モバイルでレポートを見る(docs/ = GitHub Pages)
 
 `screen.py` が生成したレポートを、パスワード保護されたPWA(スマホのホーム画面に
 追加できるWebアプリ)として閲覧できます。サーバー・API・データベースは一切なく、
-`output/` のレポートを暗号化してGitHub Pages(等の静的ホスティング)に置くだけです。
+`output/` のレポートを暗号化してGitHub Pagesに置くだけです。
 
 ```bash
 # .env に MOBILE_DASHBOARD_PASSWORD(閲覧用パスフレーズ)を設定してから
-python sync_report.py            # output/の最新20件を暗号化してmobile-dashboard/reports/に同期
+python sync_report.py            # output/の最新20件を暗号化してdocs/reports/に同期
 python sync_report.py --keep 30  # 保持件数を変える場合
 ```
 
-同期後、`mobile-dashboard/` を含めてリポジトリにpushし、GitHub Pages等で公開してください。
+同期後、`docs/` を含めてリポジトリにpushしてください。このリポジトリはGitHub Pagesの
+Source設定で `main` ブランチの `/docs` を公開するようにしてあります
+(Settings > Pages)。公開URLは `https://<GitHubユーザー名>.github.io/stock-selector/`。
 
-**セキュリティモデル**: レポート本文(スコア・銘柄名・Fable 5コメント)は
-`sync_report.py`実行時にパスフレーズからPBKDF2(SHA-256, 210,000回)で鍵を導出し、
-AES-256-GCMで暗号化した状態でしか置きません。復号はブラウザ側(`js/crypto.js`、
-Web Crypto API)でのみ行われ、平文がサーバーやリポジトリに残ることはありません。
-ただし、GitHub Pagesは**ソースリポジトリをprivateにしても公開URL自体は誰でも
-開ける**仕様のため、このパスワードゲートが実質的な唯一の防御になります。
-パスワードは`.env`に置く適当な文字列とは別に、ある程度の強度のものにしてください。
+**リポジトリはpublicです**(GitHub Free ではprivateリポジトリからPagesを公開できない
+ため)。ただし公開されているのは`screen.py`等のスクリーニングロジックのコードのみで、
+実際のレポート内容(銘柄名・スコア・Fable 5コメント)は下記の通り暗号化済みの状態
+でしかリポジトリに含めていません。`.env`(パスフレーズ本体)は`.gitignore`済みです。
+
+**セキュリティモデル**: レポート本文は`sync_report.py`実行時にパスフレーズから
+PBKDF2(SHA-256, 210,000回)で鍵を導出し、AES-256-GCMで暗号化した状態でしか
+置きません。復号はブラウザ側(`js/crypto.js`、Web Crypto API)でのみ行われ、
+平文がサーバーやリポジトリに残ることはありません。パスワードはある程度の
+強度のものを使ってください。
 
 ## 構成
 
 ```
 stock-selector/
   screen.py                    # エントリーポイント
-  sync_report.py               # output/のレポートを暗号化してmobile-dashboard/に同期
+  sync_report.py               # output/のレポートを暗号化してdocs/に同期
   forward_test.py              # スコアの事後検証(フォワードテスト)集計
   src/data/
     jquants_client.py          # JP株データ取得
@@ -137,9 +142,10 @@ stock-selector/
     scorer.py                   # 総合スコア合成
   src/agent/
     fable_synthesis.py          # Claude Fable 5への問い合わせとレポート生成
+  notes/                       # 設計レビュー・チャット引き継ぎメモ
   data_cache/                  # S&P 500構成銘柄リスト等のキャッシュ(自動生成)
   output/                      # レポート(.md)と検証用スナップショット(.json)
-  mobile-dashboard/            # レポート閲覧用PWA(暗号化データのみを含む)
+  docs/                        # レポート閲覧用PWA(暗号化データのみを含む)= GitHub Pages公開先
     index.html / css / js/     # アプリ本体(パスワード復号・一覧・詳細表示)
     manifest.json / service-worker.js  # PWA化・オフラインキャッシュ
     reports/                   # sync_report.pyが生成する暗号化済みレポート

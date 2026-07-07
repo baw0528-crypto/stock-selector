@@ -1,8 +1,11 @@
-"""output/ のレポートスナップショットを mobile-dashboard/reports/ に暗号化して同期する。
+"""output/ のレポートスナップショットを docs/reports/ に暗号化して同期する。
 
 screen.py を実行した後にこのスクリプトを叩くと、最新N件の report_*.json を
-パスフレーズで暗号化(PBKDF2 + AES-256-GCM)して mobile-dashboard/reports/ にコピーし、
+パスフレーズで暗号化(PBKDF2 + AES-256-GCM)して docs/reports/ にコピーし、
 一覧表示用のマニフェスト(これも暗号化)を生成する。
+
+docs/ はモバイル閲覧用PWA本体であると同時に、GitHub Pagesの公開ディレクトリ
+(Settings > Pages > Source > /docs)としてそのまま使う想定。
 
 リポジトリ(GitHub Pages配信元)を private にしても公開されるPagesのURL自体は
 誰でも開けてしまうため、レポート本文はここで暗号化した状態でしか置かない。
@@ -36,7 +39,7 @@ SALT_LEN = 16
 NONCE_LEN = 12
 
 OUTPUT_DIR = Path("output")
-DASHBOARD_DIR = Path("mobile-dashboard")
+DASHBOARD_DIR = Path("docs")
 REPORTS_DIR = DASHBOARD_DIR / "reports"
 
 REPORT_RE = re.compile(r"^report_(\d{8}_\d{4})\.json$")
@@ -150,7 +153,7 @@ def main() -> None:
     print(f"{len(reports)}件のレポートを暗号化して {REPORTS_DIR}/ に同期しました。")
     if removed:
         print(f"対象外になった古いレポート{removed}件を削除しました。")
-    print("反映するには mobile-dashboard/ を含めて git commit & push してください。")
+    print("反映するには docs/ を含めて git commit & push してください。")
 
 
 if __name__ == "__main__":
