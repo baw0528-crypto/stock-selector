@@ -32,4 +32,4 @@ def test_rank_candidates_sorts_descending_and_limits():
 
 def test_completeness_label_reflects_missing_price_data():
     c = CandidateScore(code="A", market="us", has_price_data=False, fundamental_metrics=2, news_count=5)
-    assert c.completeness_label() == "P✗ F2/5 N5"
+    assert c.completeness_label() == "P✗ F2/6 N5"

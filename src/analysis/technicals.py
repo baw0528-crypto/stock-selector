@@ -104,13 +104,33 @@ def score_technicals(df: pd.DataFrame, benchmark_df: pd.DataFrame | None = None)
         # 高値から-30%以下で0点、高値で100点の線形
         high_score = max(0, min(100, (proximity - 0.7) / 0.3 * 100))
 
+    # カタリスト検知: 直近10営業日に「ギャップ上昇(前日終値比+3%超の寄り)かつ
+    # 出来高が30日平均の2倍超」の日があれば、材料が出てトレンド転換した可能性が
+    # 高いとみなしボーナスを与える(決算・材料ドリブンの初動を捉える)。
+    gap_bonus = 0.0
+    if len(df) >= 31 and "Open" in df.columns:
+        recent = df.tail(11)  # 前日終値の参照に1日余分に取る
+        opens = recent["Open"].values
+        closes = recent["Close"].values
+        vols = recent["Volume"].values
+        base_vol_arr = volume.tail(30).mean()
+        for i in range(1, len(recent)):
+            gap_pct = (opens[i] / closes[i - 1] - 1) * 100 if closes[i - 1] else 0.0
+            vol_spike = base_vol_arr > 0 and vols[i] > base_vol_arr * 2
+            if gap_pct > 3.0 and vol_spike:
+                gap_bonus = 15.0
+                break
+
+    # イベント枠(0.10): ゴールデンクロス(±10)とギャップ上昇(+15)を合算
+    event_score = max(0, min(100, 50 + golden_cross_bonus + gap_bonus))
+
     total = (
         trend_score * 0.30
         + rs_score * 0.20
         + high_score * 0.15
         + rsi_score * 0.15
         + volume_score * 0.10
-        + (50 + golden_cross_bonus) * 0.10
+        + event_score * 0.10
     )
     total = round(max(0, min(100, total)), 1)
 
@@ -120,5 +140,6 @@ def score_technicals(df: pd.DataFrame, benchmark_df: pd.DataFrame | None = None)
             f"trend={trend_score:.0f} rs={rs_score:.0f}{'' if rs_available else '(中立)'} "
             f"hi52={high_score:.0f} rsi={rsi_value:.0f} "
             f"volume={volume_score:.0f} cross_bonus={golden_cross_bonus:+.0f}"
+            f" gap_bonus={gap_bonus:+.0f}"
         ),
     }

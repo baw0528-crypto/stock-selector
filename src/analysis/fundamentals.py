@@ -65,6 +65,15 @@ def score_fundamentals(data: dict) -> dict:
         # 300%超は財務リスク大として頭打ちの低評価。
         scores.append(_clip(95 - dte * 0.3, 5, 90))
 
+    # 決算サプライズ(カタリスト): 直近45日以内に発表された決算のみ対象。
+    # 「好材料発表直後」を捉えるための項目なので、古い決算は加味しない
+    # (その場合この指標はカウントされず、他の指標だけで平均される)。
+    surprise = data.get("earnings_surprise_pct")
+    days_since = data.get("earnings_surprise_days")
+    if surprise is not None and days_since is not None and days_since <= 45:
+        # サプライズ+5%→75点、+10%以上→90点前後。ネガティブサプライズは大きく減点
+        scores.append(_clip(50 + surprise * 5, 5, 95))
+
     if not scores:
         return {"score": 50.0, "metrics_used": 0}
 

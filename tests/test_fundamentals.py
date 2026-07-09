@@ -40,3 +40,17 @@ def test_high_debt_to_equity_is_penalized():
     leveraged = score_fundamentals({"debt_to_equity_pct": 280})
     assert healthy["score"] > leveraged["score"]
     assert healthy["metrics_used"] == 1
+
+
+def test_recent_earnings_surprise_is_scored():
+    beat = score_fundamentals({"earnings_surprise_pct": 8, "earnings_surprise_days": 10})
+    miss = score_fundamentals({"earnings_surprise_pct": -8, "earnings_surprise_days": 10})
+    assert beat["metrics_used"] == 1
+    assert beat["score"] > 50 > miss["score"]
+
+
+def test_stale_earnings_surprise_is_ignored():
+    """45日より古い決算サプライズは「直後の材料」ではないので加味しない。"""
+    stale = score_fundamentals({"earnings_surprise_pct": 8, "earnings_surprise_days": 70})
+    assert stale["metrics_used"] == 0
+    assert stale["score"] == 50.0

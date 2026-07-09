@@ -3,7 +3,7 @@
  * キャッシュするのは暗号化済みファイルのみなので、Cache Storage自体に
  * 平文のレポート内容が残ることはない。
  */
-const CACHE_NAME = "stock-selector-dashboard-v1";
+const CACHE_NAME = "stock-selector-dashboard-v2";
 const SHELL_FILES = [
   "./",
   "index.html",

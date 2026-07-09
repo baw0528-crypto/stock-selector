@@ -93,6 +93,12 @@ def build_us_candidates(
         except Exception as e:  # noqa: BLE001
             print(f"[warn] {ticker}: US株財務データ取得に失敗しました ({e})")
 
+        # 直近決算のEPSサプライズ(カタリスト)。取れなくてもスコアリングは続行
+        surprise = us_market_client.fetch_earnings_surprise(ticker)
+        if surprise:
+            fundamentals["earnings_surprise_pct"] = surprise["surprise_pct"]
+            fundamentals["earnings_surprise_days"] = surprise["days_since"]
+
         # "V"のような短いティッカーの検索は誤ヒットが多いため会社名で検索する
         query = build_us_query(ticker, fundamentals.get("short_name"))
         headlines = fetch_headlines(query, lang="en")
@@ -184,23 +190,26 @@ def main():
     parser.add_argument("--top-sectors", type=int, default=2, help="--sector-first時に採用する上位セクター数")
     parser.add_argument(
         "--universe",
-        choices=["default", "sp500"],
+        choices=["default", "sp500", "sp400", "sp600", "sp1500"],
         default="default",
-        help="sp500を指定するとS&P 500全銘柄を対象に2段階スクリーニング(テクニカル粗選別→フル評価)する",
+        help=(
+            "指数構成銘柄を対象に2段階スクリーニング(テクニカル粗選別→フル評価)する。"
+            "sp500=大型 / sp400=中型 / sp600=小型 / sp1500=全部(約1500銘柄)"
+        ),
     )
     parser.add_argument(
         "--prefilter-top",
         type=int,
         default=50,
-        help="--universe sp500時、第1段階(テクニカル粗選別)で残す銘柄数",
+        help="指数ユニバース指定時、第1段階(テクニカル粗選別)で残す銘柄数",
     )
     args = parser.parse_args()
 
     # 黙って無視される組み合わせを明示的に弾く
     if args.tickers and (args.sector_first or args.market == "both"):
         parser.error("--tickers は --sector-first / --market both とは併用できません")
-    if args.universe == "sp500" and (args.tickers or args.sector_first or args.market != "us"):
-        parser.error("--universe sp500 は --market us 専用で、--tickers / --sector-first とは併用できません")
+    if args.universe != "default" and (args.tickers or args.sector_first or args.market != "us"):
+        parser.error("指数ユニバース(--universe)は --market us 専用で、--tickers / --sector-first とは併用できません")
 
     run_meta = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -209,7 +218,7 @@ def main():
         "universe": args.universe,
         "sector_first": args.sector_first,
         "top_sectors": args.top_sectors if args.sector_first else None,
-        "prefilter_top": args.prefilter_top if args.universe == "sp500" else None,
+        "prefilter_top": args.prefilter_top if args.universe != "default" else None,
         "weights": {
             "fundamental": args.weight_fundamental,
             "technical": args.weight_technical,
@@ -289,8 +298,8 @@ def main():
             all_candidates += cands
             headlines_map.update(hmap)
 
-    elif args.universe == "sp500":
-        universe_tickers = us_market_client.get_sp500_tickers()
+    elif args.universe != "default":
+        universe_tickers = us_market_client.get_universe_tickers(args.universe)
         cands, hmap = build_us_candidates_prefiltered(universe_tickers, args.prefilter_top)
         all_candidates += cands
         headlines_map.update(hmap)
@@ -315,6 +324,23 @@ def main():
             cands, hmap = build_us_candidates(us_tickers)
             all_candidates += cands
             headlines_map.update(hmap)
+
+    # sector-first以外の実行でも、セクター相対強度は市況の文脈情報として
+    # スナップショットに記録する(ダッシュボードでの推移表示用)。失敗しても本処理は続行。
+    if not sector_ranking_meta and args.market in ("us", "both"):
+        try:
+            sector_ranking_meta = [
+                {
+                    "code": s.code,
+                    "name": s.name,
+                    "market": s.market,
+                    "return_pct": s.return_pct,
+                    "relative_strength_pct": s.relative_strength_pct,
+                }
+                for s in rank_us_sectors()
+            ]
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] セクター相対強度の取得に失敗しました(スキップ) ({e})")
 
     for c in all_candidates:
         c.compute_total(args.weight_fundamental, args.weight_technical, args.weight_news)

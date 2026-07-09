@@ -5,7 +5,10 @@ from src.analysis.technicals import score_technicals
 
 
 def _make_df(closes, volume=1_000_000):
-    return pd.DataFrame({"Close": closes, "Volume": [volume] * len(closes)})
+    closes = list(closes)
+    # Openは前日終値と同じ(ギャップなし)をデフォルトにする
+    opens = [closes[0]] + closes[:-1]
+    return pd.DataFrame({"Open": opens, "Close": closes, "Volume": [volume] * len(closes)})
 
 
 def test_insufficient_data_returns_neutral():
@@ -57,6 +60,20 @@ def test_relative_strength_neutral_without_benchmark():
     closes = [100 + i * 0.5 for i in range(90)]
     result = score_technicals(_make_df(closes))
     assert "rs=50(中立)" in result["detail"]
+
+
+def test_gap_up_with_volume_spike_gets_catalyst_bonus():
+    """直近のギャップ上昇+出来高急増(材料が出た形)はgap_bonusが付く。"""
+    n = 60
+    closes = [100.0] * (n - 3) + [106.0, 107.0, 108.0]  # 3日前に+6%ギャップ
+    opens = [100.0] * (n - 3) + [106.0, 106.5, 107.5]
+    volumes = [1_000_000] * (n - 3) + [3_000_000, 1_500_000, 1_200_000]
+    df = pd.DataFrame({"Open": opens, "Close": closes, "Volume": volumes})
+    result = score_technicals(df)
+    assert "gap_bonus=+15" in result["detail"]
+
+    quiet = score_technicals(_make_df([100.0] * n))
+    assert "gap_bonus=+0" in quiet["detail"]
 
 
 def test_52w_high_proximity_favors_stocks_near_high():

@@ -15,8 +15,12 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-SP500_CACHE = Path("data_cache/sp500_tickers.json")
-SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+# S&P各指数の構成銘柄リスト(Wikipedia)。sp500=大型 / sp400=中型 / sp600=小型
+INDEX_SOURCES = {
+    "sp500": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+    "sp400": "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
+    "sp600": "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies",
+}
 
 
 def get_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
@@ -60,36 +64,88 @@ def get_price_histories(tickers: list[str], period: str = "1y") -> dict[str, pd.
     return result
 
 
-def get_sp500_tickers(max_age_days: int = 30) -> list[str]:
-    """S&P 500構成銘柄のティッカーを取得する(ローカルキャッシュ付き)。
+def get_index_tickers(index: str, max_age_days: int = 30) -> list[str]:
+    """指定したS&P指数の構成銘柄ティッカーを取得する(ローカルキャッシュ付き)。
 
     構成銘柄は入替えがあるため、キャッシュが古くなったらWikipediaの
     一覧から再取得する。オフライン時はキャッシュが古くてもそのまま使う。
     """
-    if SP500_CACHE.exists():
-        cached = json.loads(SP500_CACHE.read_text())
+    if index not in INDEX_SOURCES:
+        raise ValueError(f"未対応の指数です: {index} (対応: {', '.join(INDEX_SOURCES)})")
+    cache_path = Path(f"data_cache/{index}_tickers.json")
+
+    cached = None
+    if cache_path.exists():
+        cached = json.loads(cache_path.read_text())
         age_days = (time.time() - cached["fetched_at"]) / 86400
         if age_days < max_age_days:
             return cached["tickers"]
-    else:
-        cached = None
 
     try:
         # pd.read_htmlに直接URLを渡すとデフォルトUAがWikipediaに403で弾かれる
-        resp = requests.get(SP500_URL, headers={"User-Agent": "stock-selector/1.0"}, timeout=30)
+        resp = requests.get(
+            INDEX_SOURCES[index], headers={"User-Agent": "stock-selector/1.0"}, timeout=30
+        )
         resp.raise_for_status()
         tables = pd.read_html(StringIO(resp.text))
+        # 構成銘柄テーブルは通常最初だが、Symbol列を持つ最初のテーブルを探す
+        table = next(t for t in tables if "Symbol" in t.columns)
         # yfinanceはクラス株の区切りにドットではなくハイフンを使う(BRK.B -> BRK-B)
-        tickers = [t.replace(".", "-") for t in tables[0]["Symbol"].tolist()]
+        tickers = [str(t).replace(".", "-") for t in table["Symbol"].tolist()]
     except Exception as e:  # noqa: BLE001
         if cached:
-            print(f"[warn] S&P 500リストの更新に失敗。古いキャッシュを使います ({e})")
+            print(f"[warn] {index}リストの更新に失敗。古いキャッシュを使います ({e})")
             return cached["tickers"]
-        raise RuntimeError(f"S&P 500構成銘柄リストの取得に失敗しました: {e}") from e
+        raise RuntimeError(f"{index}構成銘柄リストの取得に失敗しました: {e}") from e
 
-    SP500_CACHE.parent.mkdir(exist_ok=True)
-    SP500_CACHE.write_text(json.dumps({"fetched_at": time.time(), "tickers": tickers}))
+    cache_path.parent.mkdir(exist_ok=True)
+    cache_path.write_text(json.dumps({"fetched_at": time.time(), "tickers": tickers}))
     return tickers
+
+
+def get_universe_tickers(universe: str) -> list[str]:
+    """ユニバース名からティッカーリストを解決する。sp1500 = 500+400+600の合算。"""
+    if universe == "sp1500":
+        tickers: list[str] = []
+        for index in ("sp500", "sp400", "sp600"):
+            tickers += get_index_tickers(index)
+        return list(dict.fromkeys(tickers))  # 重複除去(指数間の入替え過渡期対策)
+    return get_index_tickers(universe)
+
+
+def get_sp500_tickers(max_age_days: int = 30) -> list[str]:
+    """後方互換のためのエイリアス。"""
+    return get_index_tickers("sp500", max_age_days=max_age_days)
+
+
+def fetch_earnings_surprise(ticker: str) -> Optional[dict]:
+    """直近の発表済み決算のEPSサプライズを取得する。
+
+    「好材料発表直後の銘柄」を捉えるカタリスト系の指標。
+    発表済み(Reported EPSが存在する)最新の四半期について、
+    サプライズ率(%)と発表からの経過日数を返す。取得不能ならNone。
+    """
+    try:
+        df = yf.Ticker(ticker).earnings_dates
+    except Exception:  # noqa: BLE001
+        return None
+    if df is None or df.empty or "Surprise(%)" not in df.columns:
+        return None
+    reported = df.dropna(subset=["Reported EPS", "Surprise(%)"])
+    if reported.empty:
+        return None
+    latest_date = reported.index.max()
+    row = reported.loc[latest_date]
+    if isinstance(row, pd.DataFrame):  # 同日に複数行ある場合
+        row = row.iloc[0]
+    now = pd.Timestamp.now(tz=latest_date.tz) if latest_date.tz else pd.Timestamp.now()
+    days_since = (now - latest_date).days
+    if days_since < 0:
+        return None
+    return {
+        "surprise_pct": float(row["Surprise(%)"]),
+        "days_since": int(days_since),
+    }
 
 
 def fetch_fundamentals(ticker: str) -> dict:

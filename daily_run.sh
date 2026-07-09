@@ -11,9 +11,9 @@ cd "$PROJECT_DIR"
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') daily_run start ====="
 
-# S&P 500全体から2段階スクリーニング(テクニカル粗選別50銘柄→フル評価)。
-# デフォルト5銘柄では相対強度が「巨大テック内の比較」にしかならないため全市場対象にする。
-"$PYTHON" screen.py --universe sp500
+# S&P 1500(大型500+中型400+小型600)から2段階スクリーニング
+# (テクニカル粗選別→フル評価)。中小型株も対象にするためsp1500を使う。
+"$PYTHON" screen.py --universe sp1500 --prefilter-top 50
 "$PYTHON" sync_report.py
 
 "$GIT" add docs/

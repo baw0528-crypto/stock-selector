@@ -50,11 +50,14 @@ python screen.py --tickers AAPL,MSFT,NVDA,AMZN
 # 個別スクリーニングする(勢いのあるセクターに乗りたい場合向け)
 python screen.py --sector-first --top-sectors 2
 
-# S&P 500全銘柄を対象にした2段階スクリーニング:
+# 指数構成銘柄を対象にした2段階スクリーニング:
 # 第1段階で全銘柄の価格を一括取得しテクニカルスコアで粗選別(既定50銘柄)、
 # 第2段階で生き残りだけをファンダ・ニュース込みでフル評価する。
 # 粗選別はテクニカル基準なのでモメンタム寄りのバイアスが乗る点に注意。
-python screen.py --universe sp500 --prefilter-top 50
+python screen.py --universe sp500 --prefilter-top 50   # 大型(S&P 500)
+python screen.py --universe sp400                       # 中型(S&P 400)
+python screen.py --universe sp600                       # 小型(S&P 600)
+python screen.py --universe sp1500                      # 大中小すべて(約1500銘柄)
 ```
 
 `--sector-first` は「今どのセクターが強いか」を先に判定してから、
@@ -127,7 +130,7 @@ PBKDF2(SHA-256, 210,000回)で鍵を導出し、AES-256-GCMで暗号化した状
 
 ## 毎日の自動実行(launchd)
 
-毎朝9時に `screen.py --universe sp500`(S&P 500全体の2段階スクリーニング)→ `sync_report.py` →
+毎朝9時に `screen.py --universe sp1500`(S&P 1500=大中小型全体の2段階スクリーニング)→ `sync_report.py` →
 `git add docs/ && git commit && git push` を自動実行するlaunchd設定です。
 Macがその時刻にスリープ/シャットダウン中の場合は実行されません。
 

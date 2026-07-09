@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 # スナップショットのmetaに記録される。
 #   v1: 初期実装(トレンド/RSI/出来高/クロス + PER/ROE/増収率/利益率)
 #   v2: 対SPY相対強度・52週高値近接度・PEG・D/E・ニュースshrinkageを追加
-SCORE_VERSION = 2
+#   v3: 決算サプライズ(45日以内)・ギャップ上昇+出来高急増のカタリスト検知を追加
+SCORE_VERSION = 3
 
-FUNDAMENTAL_METRICS_MAX = 5  # per(+peg)/roe/増収率/利益率/D-E
+FUNDAMENTAL_METRICS_MAX = 6  # per(+peg)/roe/増収率/利益率/D-E/決算サプライズ
 
 
 @dataclass
