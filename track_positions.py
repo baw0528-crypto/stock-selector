@@ -163,6 +163,7 @@ def enter_position(
     source: str,
     entry_price: float | None = None,
     entered_at: str | None = None,
+    next_earnings_date: str | None = None,
 ) -> bool:
     if any(p["ticker"] == ticker for p in state["positions"]):
         print(f"[skip] {ticker}: すでに保有中のためエントリーしません")
@@ -181,6 +182,8 @@ def enter_position(
             "entered_at": entered_at,
             "score": score,
             "source": source,
+            # 保有中に決算発表をまたぐリスクの警告用(ダッシュボードで表示)
+            "next_earnings_date": next_earnings_date,
         }
     )
     print(f"[entry] {ticker} {name} @ {entry_price:.2f} ({entered_at})")
@@ -205,6 +208,7 @@ def auto_enter(state: dict, top_n: int) -> None:
             ts,
             entry_price=c.get("as_of_close"),
             entered_at=c.get("as_of_date"),
+            next_earnings_date=c.get("next_earnings_date"),
         )
 
 

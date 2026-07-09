@@ -131,6 +131,9 @@ def main() -> None:
                 "universe": meta.get("universe"),
                 "sector_first": meta.get("sector_first"),
                 "top_sectors": meta.get("top_sectors"),
+                # 変化ハイライト(前回の同条件レポートとの比較)に使う
+                "weights": meta.get("weights"),
+                "score_version": meta.get("score_version"),
                 "evaluable": len(candidates),
                 "excluded": len(snapshot.get("excluded", [])),
                 "top": _top_preview(candidates),
@@ -152,6 +155,15 @@ def main() -> None:
             json.dumps(encrypt_json(portfolio, passphrase)), encoding="utf-8"
         )
         print(f"仮想ポートフォリオ({portfolio_path.stem})を同期しました。")
+
+    # フォワードテスト集計(forward_test.py --json)もあれば同期する
+    ft_path = OUTPUT_DIR / "forward_test.json"
+    if ft_path.exists():
+        ft = json.loads(ft_path.read_text(encoding="utf-8"))
+        (REPORTS_DIR / "forward_test.enc").write_text(
+            json.dumps(encrypt_json(ft, passphrase)), encoding="utf-8"
+        )
+        print("フォワードテスト集計を同期しました。")
 
     # keep対象から外れた古い.encファイルを掃除
     removed = 0

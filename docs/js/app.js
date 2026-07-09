@@ -105,9 +105,12 @@ window.addEventListener("hashchange", route);
 function route() {
   if (!state.manifest) return;
   const hash = location.hash || "#/";
-  const m = hash.match(/^#\/report\/(.+)$/);
   hideTooltip();
-  if (m) {
+  const t = hash.match(/^#\/report\/([^/]+)\/t\/(.+)$/);
+  const m = hash.match(/^#\/report\/([^/]+)$/);
+  if (t) {
+    renderTicker(t[1], decodeURIComponent(t[2]));
+  } else if (m) {
     renderDetail(m[1]);
   } else if (hash === "#/dashboard") {
     renderDashboard();
@@ -241,16 +244,13 @@ async function renderDetail(ts) {
   const body = el("detail-body");
   body.innerHTML = `<p class="loading">読み込み中...</p>`;
   el("detail-title").textContent = formatTs(ts);
+  el("detail-back").setAttribute("href", "#/");
+  el("detail-back").innerHTML = "&lsaquo; 一覧";
 
   try {
-    let snapshot = state.reportCache.get(ts);
-    if (!snapshot) {
-      const entry = (state.manifest.reports || []).find((r) => r.ts === ts);
-      if (!entry) throw new Error("レポートが見つかりません");
-      snapshot = await fetchAndDecrypt(state.passphrase, `reports/${entry.file}`);
-      state.reportCache.set(ts, snapshot);
-    }
-    body.innerHTML = buildDetailHtml(snapshot);
+    const snapshot = await loadSnapshot(ts);
+    const prevRanks = await loadPreviousRanks(ts);
+    body.innerHTML = buildDetailHtml(snapshot, ts, prevRanks);
   } catch (e) {
     body.innerHTML = `<p class="empty">読み込みに失敗しました: ${escapeHtml(
       String(e.message || e)
@@ -258,7 +258,63 @@ async function renderDetail(ts) {
   }
 }
 
-function buildDetailHtml(snapshot) {
+async function loadSnapshot(ts) {
+  let snapshot = state.reportCache.get(ts);
+  if (!snapshot) {
+    const entry = (state.manifest.reports || []).find((r) => r.ts === ts);
+    if (!entry) throw new Error("レポートが見つかりません");
+    snapshot = await fetchAndDecrypt(state.passphrase, `reports/${entry.file}`);
+    state.reportCache.set(ts, snapshot);
+  }
+  return snapshot;
+}
+
+/** 実行条件が同じ「前回レポート」を特定するためのキー(manifestの情報から合成) */
+function entryStrategyKey(entry) {
+  const w = entry.weights || {};
+  return [
+    entry.universe || "default",
+    entry.market || "us",
+    entry.sector_first ? "sf" : "",
+    w.fundamental ?? "",
+    w.technical ?? "",
+    w.news ?? "",
+  ].join("|");
+}
+
+/** 同条件の直前レポートの code -> rank マップ。無ければnull(変化バッジ非表示)。 */
+async function loadPreviousRanks(ts) {
+  const entries = state.manifest.reports || []; // 新しい順
+  const idx = entries.findIndex((e) => e.ts === ts);
+  if (idx < 0) return null;
+  const key = entryStrategyKey(entries[idx]);
+  for (let i = idx + 1; i < entries.length; i++) {
+    if (entryStrategyKey(entries[i]) !== key) continue;
+    try {
+      const prev = await loadSnapshot(entries[i].ts);
+      const ranks = new Map();
+      for (const c of prev.candidates || []) {
+        if (c.rank != null) ranks.set(c.code, c.rank);
+      }
+      return ranks;
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** 前回同条件レポートとの順位比較バッジ(NEW/↑n/↓n) */
+function changeBadge(code, rank, prevRanks) {
+  if (!prevRanks || rank == null) return "";
+  if (!prevRanks.has(code)) return `<span class="chg chg-new">NEW</span>`;
+  const delta = prevRanks.get(code) - rank; // 正=上昇
+  if (delta > 0) return `<span class="chg chg-up">↑${delta}</span>`;
+  if (delta < 0) return `<span class="chg chg-down">↓${-delta}</span>`;
+  return "";
+}
+
+function buildDetailHtml(snapshot, ts, prevRanks) {
   const meta = snapshot.meta || {};
   const w = meta.weights || {};
   const candidates = snapshot.candidates || [];
@@ -304,12 +360,14 @@ function buildDetailHtml(snapshot) {
   }
 
   html += `<h2>スコア一覧</h2>`;
+  html += `<p class="chart-note">銘柄をタップすると内訳(テクニカル各因子・ファンダ指標・ニュース)を表示</p>`;
   html += `<div class="table-scroll"><table class="data-table">
-    <thead><tr><th>#</th><th>コード</th><th>銘柄名</th><th>総合</th><th>F</th><th>T</th><th>N</th><th>データ</th></tr></thead>
+    <thead><tr><th>#</th><th></th><th>コード</th><th>銘柄名</th><th>総合</th><th>F</th><th>T</th><th>N</th><th>データ</th></tr></thead>
     <tbody>`;
   for (const c of candidates) {
-    html += `<tr>
+    html += `<tr class="row-link" data-href="#/report/${encodeURIComponent(ts)}/t/${encodeURIComponent(c.code)}">
       <td>${c.rank ?? ""}</td>
+      <td>${changeBadge(c.code, c.rank, prevRanks)}</td>
       <td class="mono">${escapeHtml(c.code)}</td>
       <td>${escapeHtml(c.name || "")}</td>
       <td class="total">${fmtNum(c.total_score)}</td>
@@ -320,6 +378,9 @@ function buildDetailHtml(snapshot) {
     </tr>`;
   }
   html += `</tbody></table></div>`;
+  if (prevRanks) {
+    html += `<p class="chart-note">変化バッジは同条件の前回レポート比(NEW=初登場、↑↓=順位変動)</p>`;
+  }
 
   if (excluded.length > 0) {
     html += `<h2>評価不能銘柄(価格データ取得不可)</h2><ul class="plain-list">`;
@@ -340,6 +401,177 @@ function buildDetailHtml(snapshot) {
   html += `<p class="disclaimer">本レポートは投資助言ではありません。最終的な投資判断はご自身の責任で行ってください。</p>`;
 
   return html;
+}
+
+/* ---------------- 銘柄ドリルダウン ---------------- */
+
+const TECH_FACTOR_LABELS = {
+  trend: "トレンド(MA25乖離)",
+  rs: "対SPY相対強度",
+  hi52: "52週高値近接",
+  rsi: "RSI",
+  volume: "出来高",
+  cross_bonus: "ゴールデンクロス",
+  gap_bonus: "ギャップ検知",
+};
+
+/** technical_detail文字列("trend=70 rs=71 ...")をチップ表示用に分解する */
+function parseTechDetail(detail) {
+  if (!detail) return [];
+  const out = [];
+  const re = /(\w+)=([+-]?\d+(?:\.\d+)?)(\(中立\))?/g;
+  let m;
+  while ((m = re.exec(detail)) !== null) {
+    out.push({
+      key: m[1],
+      label: TECH_FACTOR_LABELS[m[1]] || m[1],
+      value: parseFloat(m[2]),
+      neutral: !!m[3],
+      isBonus: m[1].endsWith("_bonus"),
+    });
+  }
+  return out;
+}
+
+const FUND_LABELS = [
+  ["per", "PER(倍)", (v) => v.toFixed(1)],
+  ["pbr", "PBR(倍)", (v) => v.toFixed(2)],
+  ["roe", "ROE", (v) => `${v.toFixed(1)}%`],
+  ["revenue_growth_pct", "増収率", (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`],
+  ["earnings_growth_pct", "利益成長率", (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`],
+  ["profit_margin_pct", "利益率", (v) => `${v.toFixed(1)}%`],
+  ["debt_to_equity_pct", "負債資本倍率", (v) => `${v.toFixed(0)}%`],
+  ["earnings_surprise_pct", "決算サプライズ", (v) => `${v > 0 ? "+" : ""}${v.toFixed(2)}%`],
+  ["market_cap", "時価総額", (v) => `$${(v / 1e9).toFixed(1)}B`],
+];
+
+async function renderTicker(ts, code) {
+  el("list-view").classList.add("hidden");
+  el("dashboard-view").classList.add("hidden");
+  el("detail-view").classList.remove("hidden");
+  const body = el("detail-body");
+  body.innerHTML = `<p class="loading">読み込み中...</p>`;
+  el("detail-title").textContent = code;
+  el("detail-back").setAttribute("href", `#/report/${encodeURIComponent(ts)}`);
+  el("detail-back").innerHTML = "&lsaquo; レポート";
+
+  try {
+    const snapshot = await loadSnapshot(ts);
+    const c = (snapshot.candidates || []).find((x) => x.code === code)
+      || (snapshot.excluded || []).find((x) => x.code === code);
+    if (!c) throw new Error("このレポートに銘柄が見つかりません");
+    body.innerHTML = buildTickerHtml(c, snapshot);
+
+    // スコア推移(全レポート横断)は重いので後から差し込む
+    const historyEl = body.querySelector("#ticker-history");
+    if (historyEl) {
+      try {
+        const snapshots = await loadAllSnapshots();
+        historyEl.innerHTML = buildTickerHistoryHtml(code, snapshots);
+      } catch (e) {
+        historyEl.innerHTML = "";
+      }
+    }
+  } catch (e) {
+    body.innerHTML = `<p class="empty">読み込みに失敗しました: ${escapeHtml(
+      String(e.message || e)
+    )}</p>`;
+  }
+}
+
+function buildTickerHtml(c, snapshot) {
+  const meta = snapshot.meta || {};
+  const fundamentals = c.fundamentals || {};
+  let html = "";
+
+  html += `<div class="meta-block">
+    <div><span class="k">${escapeHtml(c.code)}</span> ${escapeHtml(c.name || "")}</div>
+    <div><span class="k">総合</span> ${fmtNum(c.total_score)}
+      (F ${fmtNum(c.fundamental_score)} / T ${fmtNum(c.technical_score)} / N ${fmtNum(c.news_score)})
+      &middot; 順位 ${c.rank ?? "-"} &middot; ${escapeHtml(completenessLabel(c, meta.score_version))}</div>
+    ${c.as_of_close != null ? `<div><span class="k">基準価格</span> ${c.as_of_close.toFixed(2)} (${escapeHtml(c.as_of_date || "")}終値)</div>` : ""}
+    ${c.next_earnings_date ? `<div><span class="k">次回決算</span> ${earningsBadge(c.next_earnings_date, true)}</div>` : ""}
+  </div>`;
+
+  const factors = parseTechDetail(c.technical_detail);
+  if (factors.length > 0) {
+    html += `<h2>テクニカル内訳</h2><div class="chip-grid">`;
+    for (const f of factors) {
+      const valText = f.isBonus
+        ? `${f.value > 0 ? "+" : ""}${f.value}`
+        : `${f.value}${f.neutral ? "(中立)" : ""}`;
+      const cls = f.isBonus
+        ? f.value > 0 ? "chip-pos" : f.value < 0 ? "chip-neg" : ""
+        : f.value >= 65 ? "chip-pos" : f.value <= 35 ? "chip-neg" : "";
+      html += `<div class="chip ${cls}"><span class="chip-label">${escapeHtml(f.label)}</span><span class="chip-value">${escapeHtml(valText)}</span></div>`;
+    }
+    html += `</div>`;
+  }
+
+  const fundRows = FUND_LABELS
+    .filter(([key]) => typeof fundamentals[key] === "number")
+    .map(([key, label, fmt]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(fmt(fundamentals[key]))}</td></tr>`);
+  if (fundRows.length > 0) {
+    html += `<h2>ファンダメンタルズ</h2>
+      <div class="table-scroll"><table class="data-table data-table-narrow"><tbody>${fundRows.join("")}</tbody></table></div>`;
+  }
+
+  const headlines = c.headlines || [];
+  if (headlines.length > 0) {
+    html += `<h2>直近ニュース見出し</h2><ul class="headline-list">`;
+    for (const h of headlines) {
+      const senti = h.sentiment === "positive" ? "chg-up" : h.sentiment === "negative" ? "chg-down" : "";
+      const title = escapeHtml(h.title || "");
+      const inner = h.link
+        ? `<a href="${escapeHtml(h.link)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+        : title;
+      html += `<li><span class="senti ${senti}">●</span>${inner}</li>`;
+    }
+    html += `</ul>`;
+  }
+
+  html += `<div id="ticker-history"><p class="loading">スコア推移を読み込み中...</p></div>`;
+  html += `<p class="disclaimer">本情報は投資助言ではありません。</p>`;
+  return html;
+}
+
+function buildTickerHistoryHtml(code, snapshots) {
+  const rows = [];
+  for (const { ts, snap } of snapshots) {
+    const c = (snap.candidates || []).find((x) => x.code === code);
+    if (!c) continue;
+    rows.push({
+      ts,
+      rank: c.rank,
+      total: c.total_score,
+      universe: (snap.meta || {}).universe || "-",
+    });
+  }
+  if (rows.length === 0) return "";
+  rows.sort((a, b) => (a.ts < b.ts ? 1 : -1)); // 新しい順
+  let html = `<h2>スコア推移(全レポート)</h2>
+    <div class="table-scroll"><table class="data-table">
+    <thead><tr><th>実行</th><th>ユニバース</th><th>順位</th><th>総合</th></tr></thead><tbody>`;
+  for (const r of rows.slice(0, 12)) {
+    html += `<tr>
+      <td class="mono">${formatTs(r.ts)}</td>
+      <td>${escapeHtml(r.universe)}</td>
+      <td>${r.rank ?? "-"}</td>
+      <td class="total">${fmtNum(r.total)}</td>
+    </tr>`;
+  }
+  html += `</tbody></table></div>`;
+  return html;
+}
+
+/** 決算日バッジ。7日以内は警告色、それ以外は通常表示 */
+function earningsBadge(dateStr, withLabel) {
+  if (!dateStr) return "";
+  const days = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+  if (days < 0) return "";
+  const label = withLabel ? `${escapeHtml(dateStr)} (${days}日後)` : `決算 ${escapeHtml(dateStr.slice(5))}`;
+  const cls = days <= 7 ? "earnings-badge warn" : "earnings-badge";
+  return `<span class="${cls}">${label}</span>`;
 }
 
 function fmtNum(v) {
@@ -634,6 +866,10 @@ function portfolioSection(portfolio) {
           <span>entry ${p.entry_price} (${escapeHtml(p.entered_at || "")}) ・ ${p.days_held ?? 0}日</span>
           <span>TP +${tp}%</span>
         </div>
+        ${(() => {
+          const b = earningsBadge(p.next_earnings_date);
+          return b ? `<div class="pf-earnings">${b} 保有中に決算をまたぐ可能性</div>` : "";
+        })()}
       </div>`;
     }
   }
@@ -656,6 +892,74 @@ function portfolioSection(portfolio) {
     html += `</tbody></table></div>`;
   }
 
+  html += `</section>`;
+  return html;
+}
+
+/** 直近の決算予定: 最新スナップショットの候補から14日以内の決算を持つ銘柄を列挙 */
+function upcomingEarningsSection(snapshots) {
+  const seen = new Map(); // code -> {code, name, date, ts}
+  // 新しいスナップショット優先で銘柄ごとに1件
+  for (let i = snapshots.length - 1; i >= 0; i--) {
+    const { ts, snap } = snapshots[i];
+    for (const c of snap.candidates || []) {
+      if (!c.next_earnings_date || seen.has(c.code)) continue;
+      if (c.rank == null || c.rank > TOP_N) continue;
+      seen.set(c.code, { code: c.code, name: c.name, date: c.next_earnings_date, ts });
+    }
+  }
+  const now = new Date();
+  const items = [...seen.values()]
+    .map((x) => ({ ...x, days: Math.ceil((new Date(x.date) - now) / 86400000) }))
+    .filter((x) => x.days >= 0 && x.days <= 14)
+    .sort((a, b) => a.days - b.days);
+  if (items.length === 0) return "";
+
+  let html = `<section class="chart-card">
+    <h2>直近の決算予定(上位候補)</h2>
+    <p class="chart-note">14日以内に決算発表を控える上位${TOP_N}位以内の銘柄。決算またぎは価格が大きく動くリスクイベント</p>`;
+  for (const x of items) {
+    html += `<div class="earnings-row">
+      <span class="pf-ticker mono">${escapeHtml(x.code)}</span>
+      <span class="pf-name">${escapeHtml(x.name || "")}</span>
+      ${earningsBadge(x.date)}
+    </div>`;
+  }
+  html += `</section>`;
+  return html;
+}
+
+/** フォワードテスト結果(forward_test.enc)の表示 */
+function forwardTestSection(ft) {
+  let html = `<section class="chart-card">
+    <h2>スコア検証(フォワードテスト)</h2>
+    <p class="chart-note">「スコア上位は実際にその後も上がったか」の事後検証。相関+0.1超なら並べ替えに意味がある兆し</p>`;
+
+  if (!ft || ft.status !== "ok" || !(ft.strategies || []).length) {
+    html += `<p class="empty">まだ十分な観測がありません。スナップショットが5営業日以上経過すると結果が表示されます。</p></section>`;
+    return html;
+  }
+
+  for (const s of ft.strategies) {
+    html += `<h3 class="pf-heading">${escapeHtml(s.label)} (${s.snapshots}本)</h3>`;
+    for (const r of s.results || []) {
+      if (!r.observations) continue;
+      html += `<div class="table-scroll"><table class="data-table data-table-narrow">
+        <thead><tr><th>${r.horizon}営業日後</th><th>平均</th><th>中央値</th><th>件数</th></tr></thead><tbody>`;
+      for (const [label, t] of Object.entries(r.terciles || {})) {
+        html += `<tr>
+          <td>${escapeHtml(label)}</td>
+          <td class="${numClass(t.mean_pct)}">${fmtPct(t.mean_pct)}</td>
+          <td class="${numClass(t.median_pct)}">${fmtPct(t.median_pct)}</td>
+          <td>${t.count}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div>
+        <p class="chart-note">SPY平均 ${r.benchmark_mean_pct != null ? fmtPct(r.benchmark_mean_pct) : "-"}
+        ・ 順位相関 ${r.spearman_mean != null ? (r.spearman_mean > 0 ? "+" : "") + r.spearman_mean.toFixed(3) : "-"}
+        ・ ユニーク銘柄 ${r.unique_codes ?? "-"}</p>`;
+    }
+  }
   html += `</section>`;
   return html;
 }
@@ -695,6 +999,14 @@ async function renderDashboard() {
     }
   }
 
+  // フォワードテスト集計(未同期なら非表示)
+  let forwardTest = null;
+  try {
+    forwardTest = await fetchAndDecrypt(state.passphrase, "reports/forward_test.enc");
+  } catch (e) {
+    /* まだ同期されていない */
+  }
+
   let html = "";
 
   // KPIタイル
@@ -715,6 +1027,14 @@ async function renderDashboard() {
   // 仮想ポートフォリオ(戦略ごとにセクションを並べる)
   for (const pf of portfolios) {
     html += portfolioSection(pf);
+  }
+
+  // 直近の決算予定
+  html += upcomingEarningsSection(snapshots);
+
+  // スコア検証(フォワードテスト)
+  if (forwardTest) {
+    html += forwardTestSection(forwardTest);
   }
 
   // 常連銘柄
@@ -776,6 +1096,12 @@ function showTooltip(target, text) {
 }
 
 document.addEventListener("click", (ev) => {
+  // 行タップでのドリルダウン遷移(リンク・ボタン上のタップは除外)
+  const row = ev.target.closest ? ev.target.closest("[data-href]") : null;
+  if (row && !ev.target.closest("a, button")) {
+    location.hash = row.getAttribute("data-href");
+    return;
+  }
   const t = ev.target.closest ? ev.target.closest("[data-tip]") : null;
   if (t) {
     showTooltip(t, t.getAttribute("data-tip"));

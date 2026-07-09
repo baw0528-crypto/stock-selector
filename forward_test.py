@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -157,48 +158,77 @@ def _assign_terciles(sub: pd.DataFrame) -> pd.DataFrame:
     return sub
 
 
-def summarize(df: pd.DataFrame, closes: pd.DataFrame, snapshots: list[dict], horizons: list[int]) -> None:
+def analyze(df: pd.DataFrame, closes: pd.DataFrame, snapshots: list[dict], horizons: list[int]) -> list[dict]:
+    """ホライズンごとの集計結果を機械可読な形で返す(表示・JSON出力の共通データ)。"""
+    results = []
     for h in horizons:
         sub = df[df["horizon"] == h].copy()
         if sub.empty:
-            print(f"\n=== {h}営業日後 === 観測なし(スナップショットが新しすぎる可能性)")
+            results.append({"horizon": h, "observations": 0})
             continue
 
         sub = _assign_terciles(sub)
-
-        print(f"\n=== {h}営業日後のフォワードリターン ===")
-        print(
-            f"スナップショット {sub['snapshot'].nunique()}本 / 観測 {len(sub)}件 "
-            f"(ユニーク銘柄 {sub['code'].nunique()})"
-        )
-        print("  ※ 同一銘柄・重複期間の観測は独立でないため、実効サンプル数は観測件数より少ない")
         agg = (
             sub.groupby("tercile", observed=True)["return_pct"]
             .agg(["mean", "median", "count"])
             .reindex(TERCILE_ORDER)
             .dropna(how="all")
         )
-        for label, row in agg.iterrows():
-            print(f"  {label}: 平均 {row['mean']:+.2f}% / 中央値 {row['median']:+.2f}% ({int(row['count'])}件)")
+        terciles = {
+            label: {
+                "mean_pct": round(float(row["mean"]), 2),
+                "median_pct": round(float(row["median"]), 2),
+                "count": int(row["count"]),
+            }
+            for label, row in agg.iterrows()
+        }
 
-        # ベンチマーク(SPY)の同期間リターンを参考表示
         bench_rets = [
             r for r in (
                 forward_return_pct(closes, BENCHMARK, snap["date"], h) for snap in snapshots
             ) if r is not None
         ]
-        if bench_rets:
-            print(f"  {BENCHMARK}(参考): 平均 {sum(bench_rets) / len(bench_rets):+.2f}%")
 
-        # スコアと事後リターンの順位相関(スナップショットごとに算出して平均)
         corrs = []
         for _, g in sub.groupby("snapshot"):
             if len(g) >= MIN_CANDIDATES:
                 # 順位に変換してPearson相関 = Spearman相関(scipy不要の等価計算)
                 corrs.append(g["total_score"].rank().corr(g["return_pct"].rank()))
-        if corrs:
-            mean_corr = sum(corrs) / len(corrs)
-            print(f"  スコアと事後リターンの順位相関(Spearman平均): {mean_corr:+.3f}")
+
+        results.append(
+            {
+                "horizon": h,
+                "observations": len(sub),
+                "snapshots": int(sub["snapshot"].nunique()),
+                "unique_codes": int(sub["code"].nunique()),
+                "terciles": terciles,
+                "benchmark_mean_pct": (
+                    round(sum(bench_rets) / len(bench_rets), 2) if bench_rets else None
+                ),
+                "spearman_mean": round(sum(corrs) / len(corrs), 3) if corrs else None,
+            }
+        )
+    return results
+
+
+def print_results(results: list[dict]) -> None:
+    for r in results:
+        h = r["horizon"]
+        if r["observations"] == 0:
+            print(f"\n=== {h}営業日後 === 観測なし(スナップショットが新しすぎる可能性)")
+            continue
+        print(f"\n=== {h}営業日後のフォワードリターン ===")
+        print(
+            f"スナップショット {r['snapshots']}本 / 観測 {r['observations']}件 "
+            f"(ユニーク銘柄 {r['unique_codes']})"
+        )
+        print("  ※ 同一銘柄・重複期間の観測は独立でないため、実効サンプル数は観測件数より少ない")
+        for label, t in r["terciles"].items():
+            print(f"  {label}: 平均 {t['mean_pct']:+.2f}% / 中央値 {t['median_pct']:+.2f}% ({t['count']}件)")
+        if r["benchmark_mean_pct"] is not None:
+            print(f"  {BENCHMARK}(参考): 平均 {r['benchmark_mean_pct']:+.2f}%")
+        if r["spearman_mean"] is not None:
+            print(f"  スコアと事後リターンの順位相関(Spearman平均): {r['spearman_mean']:+.3f}")
             print("    (目安: +0.1超なら並べ替えに意味がある兆し、0近辺ならランダムと区別つかず)")
 
 
@@ -206,13 +236,25 @@ def main():
     parser = argparse.ArgumentParser(description="スクリーニング結果のフォワードテスト集計")
     parser.add_argument("--horizons", type=str, default="5,20", help="カンマ区切りの営業日数 (例: 5,20,60)")
     parser.add_argument("--output-dir", type=str, default="output")
+    parser.add_argument("--json", type=str, metavar="PATH", help="集計結果をJSONでも書き出す(モバイル同期用)")
     args = parser.parse_args()
     horizons = sorted({int(h) for h in args.horizons.split(",")})
+
+    def write_json(payload: dict) -> None:
+        if not args.json:
+            return
+        payload["generated_at"] = datetime.now().isoformat(timespec="seconds")
+        payload["horizons"] = horizons
+        Path(args.json).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        print(f"JSONを {args.json} に書き出しました。")
 
     snapshots = load_snapshots(args.output_dir)
     if not snapshots:
         print("集計対象のスナップショット(output/report_*.json)がありません。")
         print("screen.py を実行するとJSONスナップショットが保存され、日を置いてから検証できます。")
+        write_json({"status": "no_snapshots", "strategies": []})
         return
     print(f"スナップショット {len(snapshots)}本を読み込みました ({snapshots[0]['date']} 〜 {snapshots[-1]['date']})")
 
@@ -230,11 +272,13 @@ def main():
     closes = fetch_closes(symbols, start=start)
     if closes.empty:
         print("[error] 価格データを取得できませんでした。ネットワーク接続を確認してください。")
+        write_json({"status": "fetch_failed", "strategies": []})
         return
 
     df = build_observations(snapshots, closes, horizons)
     if df.empty:
         print("まだどのホライズンも経過日数が足りません。日を置いて再実行してください。")
+        write_json({"status": "insufficient_data", "strategies": []})
         return
 
     # ユニバース・重み等の実行条件が異なるスナップショットを混ぜると
@@ -244,13 +288,25 @@ def main():
         groups[snap["strategy_key"]].append(snap)
     if len(groups) > 1:
         print(f"\n[info] 実行条件が{len(groups)}種類あります。混合集計せず条件別に表示します。")
+
+    strategies = []
     for i, (key, group_snaps) in enumerate(groups.items(), start=1):
         group_df = df[df["strategy_key"] == key]
         if group_df.empty:
             continue
         print(f"\n===== 条件 {i}/{len(groups)}: {group_snaps[0]['strategy_label']} "
               f"(スナップショット{len(group_snaps)}本) =====")
-        summarize(group_df, closes, group_snaps, horizons)
+        results = analyze(group_df, closes, group_snaps, horizons)
+        print_results(results)
+        strategies.append(
+            {
+                "label": group_snaps[0]["strategy_label"],
+                "snapshots": len(group_snaps),
+                "results": results,
+            }
+        )
+
+    write_json({"status": "ok", "strategies": strategies})
 
 
 if __name__ == "__main__":

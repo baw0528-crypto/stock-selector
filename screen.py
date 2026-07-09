@@ -98,11 +98,15 @@ def build_us_candidates(
         except Exception as e:  # noqa: BLE001
             print(f"[warn] {ticker}: US株財務データ取得に失敗しました ({e})")
 
-        # 直近決算のEPSサプライズ(カタリスト)。取れなくてもスコアリングは続行
-        surprise = us_market_client.fetch_earnings_surprise(ticker)
-        if surprise:
-            fundamentals["earnings_surprise_pct"] = surprise["surprise_pct"]
-            fundamentals["earnings_surprise_days"] = surprise["days_since"]
+        # 決算カレンダー: 直近サプライズ(カタリスト)と次回決算日(決算またぎ警告用)。
+        # 取れなくてもスコアリングは続行
+        earnings = us_market_client.fetch_earnings_info(ticker)
+        if earnings:
+            if earnings.get("surprise_pct") is not None:
+                fundamentals["earnings_surprise_pct"] = earnings["surprise_pct"]
+                fundamentals["earnings_surprise_days"] = earnings["days_since"]
+            if earnings.get("next_earnings_date"):
+                fundamentals["next_earnings_date"] = earnings["next_earnings_date"]
 
         # "V"のような短いティッカーの検索は誤ヒットが多いため会社名で検索する
         query = build_us_query(ticker, fundamentals.get("short_name"))
@@ -168,7 +172,10 @@ def build_us_candidates_prefiltered(
     return build_us_candidates(survivors, benchmark_df=benchmark_df)
 
 
-def _candidate_to_dict(c: CandidateScore, rank: int | None = None) -> dict:
+def _candidate_to_dict(
+    c: CandidateScore, rank: int | None = None, headlines: list[dict] | None = None
+) -> dict:
+    fundamentals = c.raw.get("fundamentals") or {}
     return {
         "rank": rank,
         "code": c.code,
@@ -184,6 +191,13 @@ def _candidate_to_dict(c: CandidateScore, rank: int | None = None) -> dict:
         "technical_detail": c.raw.get("technical_detail"),
         "as_of_close": c.raw.get("as_of_close"),
         "as_of_date": c.raw.get("as_of_date"),
+        # モバイルの銘柄ドリルダウン用: ファンダ指標の生値と直近見出し
+        "fundamentals": fundamentals,
+        "next_earnings_date": fundamentals.get("next_earnings_date"),
+        "headlines": [
+            {"title": h.get("title"), "sentiment": h.get("sentiment"), "link": h.get("link")}
+            for h in (headlines or [])[:5]
+        ],
     }
 
 
@@ -453,7 +467,10 @@ def main():
         "meta": run_meta,
         "universe_size": len(universe_tickers),
         "sector_ranking": sector_ranking_meta,
-        "candidates": [_candidate_to_dict(c, rank=i) for i, c in enumerate(ranked_all, 1)],
+        "candidates": [
+            _candidate_to_dict(c, rank=i, headlines=headlines_map.get(c.code))
+            for i, c in enumerate(ranked_all, 1)
+        ],
         "excluded": [_candidate_to_dict(c) for c in excluded],
         "top_n": args.top,
         "fable_report": fable_report,

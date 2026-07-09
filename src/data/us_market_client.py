@@ -122,34 +122,45 @@ def get_sp500_tickers(max_age_days: int = 30) -> list[str]:
     return get_index_tickers("sp500", max_age_days=max_age_days)
 
 
-def fetch_earnings_surprise(ticker: str) -> Optional[dict]:
-    """直近の発表済み決算のEPSサプライズを取得する。
+def fetch_earnings_info(ticker: str) -> Optional[dict]:
+    """決算カレンダー情報を取得する。
 
-    「好材料発表直後の銘柄」を捉えるカタリスト系の指標。
-    発表済み(Reported EPSが存在する)最新の四半期について、
-    サプライズ率(%)と発表からの経過日数を返す。取得不能ならNone。
+    - surprise_pct / days_since: 直近の発表済み決算のEPSサプライズ%と経過日数
+      (「好材料発表直後の銘柄」を捉えるカタリスト系指標)。未発表しかなければNone
+    - next_earnings_date: 次回(未来)の決算発表予定日(YYYY-MM-DD)。
+      保有ポジションが決算をまたぐリスクの警告に使う。予定が無ければNone
+
+    APIから何も取れない場合はNoneを返す。
     """
     try:
         df = yf.Ticker(ticker).earnings_dates
     except Exception:  # noqa: BLE001
         return None
-    if df is None or df.empty or "Surprise(%)" not in df.columns:
+    if df is None or df.empty:
         return None
-    reported = df.dropna(subset=["Reported EPS", "Surprise(%)"])
-    if reported.empty:
+
+    tz = df.index.tz
+    now = pd.Timestamp.now(tz=tz) if tz else pd.Timestamp.now()
+    result: dict = {"surprise_pct": None, "days_since": None, "next_earnings_date": None}
+
+    future = df[df.index > now]
+    if not future.empty:
+        result["next_earnings_date"] = future.index.min().strftime("%Y-%m-%d")
+
+    if "Surprise(%)" in df.columns and "Reported EPS" in df.columns:
+        reported = df.dropna(subset=["Reported EPS", "Surprise(%)"])
+        reported = reported[reported.index <= now]
+        if not reported.empty:
+            latest_date = reported.index.max()
+            row = reported.loc[latest_date]
+            if isinstance(row, pd.DataFrame):  # 同日に複数行ある場合
+                row = row.iloc[0]
+            result["surprise_pct"] = float(row["Surprise(%)"])
+            result["days_since"] = int((now - latest_date).days)
+
+    if result["surprise_pct"] is None and result["next_earnings_date"] is None:
         return None
-    latest_date = reported.index.max()
-    row = reported.loc[latest_date]
-    if isinstance(row, pd.DataFrame):  # 同日に複数行ある場合
-        row = row.iloc[0]
-    now = pd.Timestamp.now(tz=latest_date.tz) if latest_date.tz else pd.Timestamp.now()
-    days_since = (now - latest_date).days
-    if days_since < 0:
-        return None
-    return {
-        "surprise_pct": float(row["Surprise(%)"]),
-        "days_since": int(days_since),
-    }
+    return result
 
 
 def fetch_fundamentals(ticker: str) -> dict:

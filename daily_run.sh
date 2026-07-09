@@ -22,6 +22,9 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') daily_run start ====="
 "$PYTHON" screen.py --universe sp600 --weight-technical 0.6 --weight-fundamental 0.25 --weight-news 0.15
 "$PYTHON" track_positions.py --auto-enter 3 --portfolio aggressive
 
+# フォワードテスト集計(観測が無い日でもJSONは出力される)。失敗しても同期は続行
+"$PYTHON" forward_test.py --json output/forward_test.json || echo "[warn] forward_test failed (continuing)"
+
 "$PYTHON" sync_report.py
 
 "$GIT" add docs/
