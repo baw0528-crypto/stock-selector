@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +23,42 @@ import yfinance as yf
 
 BENCHMARK = "SPY"
 MIN_CANDIDATES = 5  # これ未満のスナップショットは分位集計が無意味なので除外
+
+
+def strategy_key(meta: dict) -> str:
+    """混ぜて集計してよい実行条件を識別するキー。
+
+    ユニバース・重み・スコアバージョン等が異なるスナップショットを
+    ひとつの分位・相関に混ぜると「戦略比較」ではなく混合物になるため、
+    条件ごとに分けて集計する。古いスナップショットからも合成できる。
+    """
+    weights = meta.get("weights") or {}
+    payload = {
+        "score_version": meta.get("score_version", 1),
+        "market": meta.get("market", "unknown"),
+        "universe": meta.get("universe", "default"),
+        "sector_first": bool(meta.get("sector_first", False)),
+        "weights": {
+            "fundamental": weights.get("fundamental"),
+            "technical": weights.get("technical"),
+            "news": weights.get("news"),
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def strategy_label(meta: dict) -> str:
+    """集計結果の見出し用の人間可読な戦略ラベル。"""
+    weights = meta.get("weights") or {}
+    w = "/".join(
+        f"{weights.get(k):.2f}" if weights.get(k) is not None else "?"
+        for k in ("fundamental", "technical", "news")
+    )
+    return (
+        f"universe={meta.get('universe', 'default')} "
+        f"weights(F/T/N)={w} v{meta.get('score_version', 1)}"
+        + (" sector-first" if meta.get("sector_first") else "")
+    )
 
 
 def yf_symbol(candidate: dict) -> str:
@@ -42,13 +79,16 @@ def load_snapshots(output_dir: str = "output") -> list[dict]:
         if len(candidates) < MIN_CANDIDATES:
             print(f"[info] {path.name}: 評価銘柄が{len(candidates)}件しかないため集計から除外")
             continue
+        meta = data.get("meta", {})
         snapshots.append(
             {
                 "file": path.name,
-                "date": data["meta"]["generated_at"][:10],
-                "weights": data["meta"].get("weights"),
+                "date": meta["generated_at"][:10],
+                "weights": meta.get("weights"),
                 # score_versionが無い古いスナップショットはv1(初期ロジック)とみなす
-                "score_version": data["meta"].get("score_version", 1),
+                "score_version": meta.get("score_version", 1),
+                "strategy_key": strategy_key(meta),
+                "strategy_label": strategy_label(meta),
                 "candidates": candidates,
             }
         )
@@ -96,6 +136,7 @@ def build_observations(snapshots: list[dict], closes: pd.DataFrame, horizons: li
                         "total_score": c["total_score"],
                         "horizon": h,
                         "return_pct": ret,
+                        "strategy_key": snap["strategy_key"],
                     }
                 )
     return pd.DataFrame(rows)
@@ -126,7 +167,11 @@ def summarize(df: pd.DataFrame, closes: pd.DataFrame, snapshots: list[dict], hor
         sub = _assign_terciles(sub)
 
         print(f"\n=== {h}営業日後のフォワードリターン ===")
-        print(f"スナップショット {sub['snapshot'].nunique()}本 / 観測 {len(sub)}件")
+        print(
+            f"スナップショット {sub['snapshot'].nunique()}本 / 観測 {len(sub)}件 "
+            f"(ユニーク銘柄 {sub['code'].nunique()})"
+        )
+        print("  ※ 同一銘柄・重複期間の観測は独立でないため、実効サンプル数は観測件数より少ない")
         agg = (
             sub.groupby("tercile", observed=True)["return_pct"]
             .agg(["mean", "median", "count"])
@@ -178,7 +223,6 @@ def main():
             f"[warn] スコアリングロジックの異なるバージョンが混在しています "
             f"({', '.join(f'v{v}: {n}本' for v, n in counts.items())})。"
         )
-        print("       相関の解釈時は注意してください。バージョン別に見たい場合はoutput/を分けて集計してください。")
 
     symbols = sorted({yf_symbol(c) for snap in snapshots for c in snap["candidates"]} | {BENCHMARK})
     start = min(snap["date"] for snap in snapshots)
@@ -192,7 +236,21 @@ def main():
     if df.empty:
         print("まだどのホライズンも経過日数が足りません。日を置いて再実行してください。")
         return
-    summarize(df, closes, snapshots, horizons)
+
+    # ユニバース・重み等の実行条件が異なるスナップショットを混ぜると
+    # 「戦略の良し悪し」ではなく混合物の集計になるため、条件ごとに分けて表示する
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for snap in snapshots:
+        groups[snap["strategy_key"]].append(snap)
+    if len(groups) > 1:
+        print(f"\n[info] 実行条件が{len(groups)}種類あります。混合集計せず条件別に表示します。")
+    for i, (key, group_snaps) in enumerate(groups.items(), start=1):
+        group_df = df[df["strategy_key"] == key]
+        if group_df.empty:
+            continue
+        print(f"\n===== 条件 {i}/{len(groups)}: {group_snaps[0]['strategy_label']} "
+              f"(スナップショット{len(group_snaps)}本) =====")
+        summarize(group_df, closes, group_snaps, horizons)
 
 
 if __name__ == "__main__":

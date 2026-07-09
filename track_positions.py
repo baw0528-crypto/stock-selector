@@ -155,26 +155,35 @@ def fetch_last_close(ticker: str) -> tuple[float, str] | None:
 
 # ---------------- 操作 ----------------
 
-def enter_position(state: dict, ticker: str, name: str, score: float | None, source: str) -> bool:
+def enter_position(
+    state: dict,
+    ticker: str,
+    name: str,
+    score: float | None,
+    source: str,
+    entry_price: float | None = None,
+    entered_at: str | None = None,
+) -> bool:
     if any(p["ticker"] == ticker for p in state["positions"]):
         print(f"[skip] {ticker}: すでに保有中のためエントリーしません")
         return False
-    fetched = fetch_last_close(ticker)
-    if not fetched:
-        print(f"[warn] {ticker}: 価格を取得できずエントリーできません")
-        return False
-    price, date = fetched
+    if entry_price is None or entered_at is None:
+        fetched = fetch_last_close(ticker)
+        if not fetched:
+            print(f"[warn] {ticker}: 価格を取得できずエントリーできません")
+            return False
+        entry_price, entered_at = fetched
     state["positions"].append(
         {
             "ticker": ticker,
             "name": name,
-            "entry_price": round(price, 4),
-            "entered_at": date,
+            "entry_price": round(entry_price, 4),
+            "entered_at": entered_at,
             "score": score,
             "source": source,
         }
     )
-    print(f"[entry] {ticker} {name} @ {price:.2f} ({date})")
+    print(f"[entry] {ticker} {name} @ {entry_price:.2f} ({entered_at})")
     return True
 
 
@@ -186,7 +195,17 @@ def auto_enter(state: dict, top_n: int) -> None:
     ts = report["meta"]["generated_at"]
     candidates = [c for c in report.get("candidates", []) if c.get("market") == "us"]
     for c in candidates[:top_n]:
-        enter_position(state, c["code"], c.get("name", c["code"]), c.get("total_score"), ts)
+        # スナップショットに記録されたシグナル時点の終値でエントリーする。
+        # 古い形式のスナップショット(as_of_close無し)は最新終値にフォールバック
+        enter_position(
+            state,
+            c["code"],
+            c.get("name", c["code"]),
+            c.get("total_score"),
+            ts,
+            entry_price=c.get("as_of_close"),
+            entered_at=c.get("as_of_date"),
+        )
 
 
 def update_positions(state: dict, tp_pct: float, sl_pct: float, max_hold: int) -> None:

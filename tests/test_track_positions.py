@@ -66,3 +66,29 @@ def test_compute_stats_win_rate_and_profit_factor():
 
 def test_compute_stats_empty():
     assert compute_stats([]) == {"trades": 0}
+
+
+def test_enter_position_uses_snapshot_price_without_fetching():
+    """as_of_close/as_of_dateが渡された場合、ネットワーク取得せずその価格で建玉する。"""
+    from track_positions import enter_position
+
+    state = {"positions": [], "closed": []}
+    ok = enter_position(
+        state, "TEST", "Test Co", 70.0, "report-ts",
+        entry_price=123.45, entered_at="2026-07-09",
+    )
+    assert ok
+    assert state["positions"][0]["entry_price"] == 123.45
+    assert state["positions"][0]["entered_at"] == "2026-07-09"
+
+
+def test_enter_position_skips_duplicate_ticker():
+    from track_positions import enter_position
+
+    state = {"positions": [{"ticker": "TEST"}], "closed": []}
+    ok = enter_position(
+        state, "TEST", "Test Co", 70.0, "report-ts",
+        entry_price=123.45, entered_at="2026-07-09",
+    )
+    assert not ok
+    assert len(state["positions"]) == 1

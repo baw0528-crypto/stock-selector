@@ -36,11 +36,16 @@ def _period_return(df, days: int) -> float | None:
 
 
 def rank_us_sectors(days: int = 20) -> list[SectorStrength]:
-    """SPY比の相対強度で米国セクターETFをランキングする。days=20は約1ヶ月。"""
+    """SPY比の相対強度で米国セクターETFをランキングする。days=20は約1ヶ月。
+
+    ベンチマークが取得できない場合は空リストを返す。0%扱いにすると
+    「相対強度」のつもりが絶対リターンの順位にすり替わってしまうため。
+    """
     bench_df = us_market_client.get_price_history(US_BENCHMARK, period="3mo")
     bench_return = _period_return(bench_df, days)
     if bench_return is None:
-        bench_return = 0.0
+        print(f"[warn] ベンチマーク({US_BENCHMARK})を取得できないためセクターランキングをスキップします")
+        return []
 
     results = []
     for etf, name in US_SECTOR_ETFS.items():
@@ -103,7 +108,8 @@ def rank_jp_sectors(days: int = 20) -> list[SectorStrength]:
     bench_df = us_market_client.get_price_history(JP_BENCHMARK, period="3mo")
     bench_return = _period_return(bench_df, days)
     if bench_return is None:
-        bench_return = 0.0
+        print(f"[warn] ベンチマーク({JP_BENCHMARK})を取得できないためセクターランキングをスキップします")
+        return []
 
     results = []
     for etf, name in JP_SECTOR_ETFS.items():

@@ -59,7 +59,12 @@ def build_jp_candidates(codes: list[str]) -> tuple[list[CandidateScore], dict]:
             has_price_data=has_price,
             fundamental_metrics=fund["metrics_used"],
             news_count=len(headlines),
-            raw={"fundamentals": fundamentals, "technical_detail": tech.get("detail")},
+            raw={
+                "fundamentals": fundamentals,
+                "technical_detail": tech.get("detail"),
+                "as_of_close": float(price_df["Close"].iloc[-1]) if has_price else None,
+                "as_of_date": str(price_df["Date"].iloc[-1])[:10] if has_price else None,
+            },
         )
         candidates.append(cand)
     return candidates, headlines_map
@@ -121,7 +126,14 @@ def build_us_candidates(
             has_price_data=has_price,
             fundamental_metrics=fund["metrics_used"],
             news_count=len(headlines),
-            raw={"fundamentals": fundamentals, "technical_detail": tech.get("detail")},
+            raw={
+                "fundamentals": fundamentals,
+                "technical_detail": tech.get("detail"),
+                # スクリーニングに使った最終価格。ペーパートレードのエントリー価格を
+                # 「実行時点の最新価格」ではなく「シグナル時点の価格」に固定するために残す
+                "as_of_close": float(price_df["Close"].iloc[-1]) if has_price else None,
+                "as_of_date": str(price_df["Date"].iloc[-1])[:10] if has_price else None,
+            },
         )
         candidates.append(cand)
     return candidates, headlines_map
@@ -170,6 +182,8 @@ def _candidate_to_dict(c: CandidateScore, rank: int | None = None) -> dict:
         "fundamental_metrics": c.fundamental_metrics,
         "news_count": c.news_count,
         "technical_detail": c.raw.get("technical_detail"),
+        "as_of_close": c.raw.get("as_of_close"),
+        "as_of_date": c.raw.get("as_of_date"),
     }
 
 

@@ -24,8 +24,12 @@ INDEX_SOURCES = {
 
 
 def get_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    """1銘柄の価格履歴を取得する。52週高値近接度の計算に1年分が要るためデフォルト1y。"""
-    df = yf.Ticker(ticker).history(period=period)
+    """1銘柄の価格履歴を取得する。52週高値近接度の計算に1年分が要るためデフォルト1y。
+
+    auto_adjust=Trueを明示(一括取得get_price_historiesと調整基準を揃える。
+    yfinanceのデフォルト変更に依存しない)。
+    """
+    df = yf.Ticker(ticker).history(period=period, auto_adjust=True)
     if df.empty:
         return df
     df = df.reset_index().rename(columns={"Date": "Date"})
