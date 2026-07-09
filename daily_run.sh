@@ -11,7 +11,9 @@ cd "$PROJECT_DIR"
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') daily_run start ====="
 
-"$PYTHON" screen.py
+# S&P 500全体から2段階スクリーニング(テクニカル粗選別50銘柄→フル評価)。
+# デフォルト5銘柄では相対強度が「巨大テック内の比較」にしかならないため全市場対象にする。
+"$PYTHON" screen.py --universe sp500
 "$PYTHON" sync_report.py
 
 "$GIT" add docs/

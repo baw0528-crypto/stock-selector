@@ -127,7 +127,7 @@ PBKDF2(SHA-256, 210,000回)で鍵を導出し、AES-256-GCMで暗号化した状
 
 ## 毎日の自動実行(launchd)
 
-毎朝9時に `screen.py`(デフォルトの5銘柄ユニバース)→ `sync_report.py` →
+毎朝9時に `screen.py --universe sp500`(S&P 500全体の2段階スクリーニング)→ `sync_report.py` →
 `git add docs/ && git commit && git push` を自動実行するlaunchd設定です。
 Macがその時刻にスリープ/シャットダウン中の場合は実行されません。
 
