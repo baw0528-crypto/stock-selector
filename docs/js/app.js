@@ -128,7 +128,11 @@ function formatTs(ts) {
 
 function modeBadge(entry) {
   if (entry.sector_first) return `セクター先行(上位${entry.top_sectors ?? "?"})`;
-  if (entry.universe === "sp500") return "SP500全体";
+  const u = entry.universe || "";
+  if (u.startsWith("sp")) {
+    const label = { sp500: "SP500(大型)", sp400: "SP400(中型)", sp600: "SP600(小型)", sp1500: "SP1500(全体)" };
+    return label[u] || u.toUpperCase();
+  }
   return `${(entry.market || "us").toUpperCase()}通常`;
 }
 
@@ -575,6 +579,11 @@ function positionMeter(pnlPct, slPct, tpPct) {
   </div>`;
 }
 
+const PORTFOLIO_LABELS = {
+  default: "通常戦略(SP1500・重み等分)",
+  aggressive: "アグレッシブ戦略(SP600小型・モメンタム重視)",
+};
+
 function portfolioSection(portfolio) {
   const s = portfolio.stats || { trades: 0 };
   const settings = portfolio.settings || {};
@@ -582,9 +591,10 @@ function portfolioSection(portfolio) {
   const sl = settings.sl_pct ?? -7;
   const positions = portfolio.positions || [];
   const closed = [...(portfolio.closed || [])].reverse(); // 新しい順
+  const label = PORTFOLIO_LABELS[portfolio.name] || portfolio.name || "";
 
   let html = `<section class="chart-card">
-    <h2>仮想ポートフォリオ(ペーパートレード)</h2>
+    <h2>仮想ポートフォリオ${label ? `: ${escapeHtml(label)}` : ""}</h2>
     <p class="chart-note">上位銘柄を仮想購入した場合の検証。利確${tp > 0 ? "+" : ""}${tp}% / 損切り${sl}% / 最大${settings.max_hold_days ?? 20}営業日。実際の売買は行っていません</p>`;
 
   // 成績タイル
@@ -675,12 +685,14 @@ async function renderDashboard() {
   const latest = snapshots[snapshots.length - 1];
   const latestTop = (latest.snap.candidates || []).find((c) => c.rank === 1);
 
-  // 仮想ポートフォリオ(未同期なら無視)
-  let portfolio = null;
-  try {
-    portfolio = await fetchAndDecrypt(state.passphrase, "reports/portfolio.enc");
-  } catch (e) {
-    /* portfolio.encが無い環境では表示しない */
+  // 仮想ポートフォリオ(戦略別、未同期のものは無視)
+  const portfolios = [];
+  for (const file of ["portfolio.enc", "portfolio_aggressive.enc"]) {
+    try {
+      portfolios.push(await fetchAndDecrypt(state.passphrase, `reports/${file}`));
+    } catch (e) {
+      /* 存在しない戦略はスキップ */
+    }
   }
 
   let html = "";
@@ -700,9 +712,9 @@ async function renderDashboard() {
     </div>
   </div>`;
 
-  // 仮想ポートフォリオ
-  if (portfolio) {
-    html += portfolioSection(portfolio);
+  // 仮想ポートフォリオ(戦略ごとにセクションを並べる)
+  for (const pf of portfolios) {
+    html += portfolioSection(pf);
   }
 
   // 常連銘柄

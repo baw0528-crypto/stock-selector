@@ -143,14 +143,15 @@ def main() -> None:
         json.dumps(manifest_encrypted), encoding="utf-8"
     )
 
-    # 仮想ポートフォリオ(track_positions.py)の状態もあれば暗号化して同期する
-    portfolio_path = OUTPUT_DIR / "portfolio.json"
-    if portfolio_path.exists():
+    # 仮想ポートフォリオ(track_positions.py)の状態もあれば暗号化して同期する。
+    # 戦略別ファイル(portfolio_*.json)もすべて対象。
+    for portfolio_path in sorted(OUTPUT_DIR.glob("portfolio*.json")):
         portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
-        (REPORTS_DIR / "portfolio.enc").write_text(
+        enc_name = portfolio_path.stem + ".enc"
+        (REPORTS_DIR / enc_name).write_text(
             json.dumps(encrypt_json(portfolio, passphrase)), encoding="utf-8"
         )
-        print("仮想ポートフォリオの状態も同期しました。")
+        print(f"仮想ポートフォリオ({portfolio_path.stem})を同期しました。")
 
     # keep対象から外れた古い.encファイルを掃除
     removed = 0

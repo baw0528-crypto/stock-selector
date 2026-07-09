@@ -11,11 +11,17 @@ cd "$PROJECT_DIR"
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') daily_run start ====="
 
-# S&P 1500(大型500+中型400+小型600)から2段階スクリーニング
-# (テクニカル粗選別→フル評価)。中小型株も対象にするためsp1500を使う。
+# 2本立てで並行検証する。track_positions.py --auto-enter は「直前のscreen.pyの
+# レポート」を読むため、screen→trackの順序を崩さないこと。
+
+# 戦略1(通常): S&P1500全体・重み等分
 "$PYTHON" screen.py --universe sp1500 --prefilter-top 50
-# 仮想ポートフォリオ: 既存ポジションの利確/損切り判定 + 当日上位3銘柄を仮想エントリー
 "$PYTHON" track_positions.py --auto-enter 3
+
+# 戦略2(アグレッシブ): 小型株のみ・モメンタム重視
+"$PYTHON" screen.py --universe sp600 --weight-technical 0.6 --weight-fundamental 0.25 --weight-news 0.15
+"$PYTHON" track_positions.py --auto-enter 3 --portfolio aggressive
+
 "$PYTHON" sync_report.py
 
 "$GIT" add docs/

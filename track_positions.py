@@ -23,9 +23,15 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-STATE_FILE = Path("output/portfolio.json")
 OUTPUT_DIR = Path("output")
 REPORT_RE = re.compile(r"^report_(\d{8}_\d{4})\.json$")
+
+
+def state_file(portfolio_name: str) -> Path:
+    """戦略別の状態ファイル。defaultは従来のportfolio.jsonを使う。"""
+    if portfolio_name == "default":
+        return OUTPUT_DIR / "portfolio.json"
+    return OUTPUT_DIR / f"portfolio_{portfolio_name}.json"
 
 DEFAULT_TP_PCT = 10.0
 DEFAULT_SL_PCT = -7.0
@@ -91,18 +97,19 @@ def compute_stats(closed: list[dict]) -> dict:
 
 # ---------------- 状態管理・データ取得 ----------------
 
-def load_state() -> dict:
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+def load_state(path: Path) -> dict:
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
     return {"positions": [], "closed": [], "settings": {}}
 
 
-def save_state(state: dict, tp_pct: float, sl_pct: float, max_hold: int) -> None:
+def save_state(state: dict, path: Path, name: str, tp_pct: float, sl_pct: float, max_hold: int) -> None:
+    state["name"] = name
     state["settings"] = {"tp_pct": tp_pct, "sl_pct": sl_pct, "max_hold_days": max_hold}
     state["stats"] = compute_stats(state["closed"])
     state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    STATE_FILE.parent.mkdir(exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def latest_report() -> dict | None:
@@ -268,9 +275,17 @@ def main() -> None:
     parser.add_argument("--tp", type=float, default=DEFAULT_TP_PCT, help="利確ライン%%(デフォルト+10)")
     parser.add_argument("--sl", type=float, default=DEFAULT_SL_PCT, help="損切りライン%%(デフォルト-7)")
     parser.add_argument("--max-hold", type=int, default=DEFAULT_MAX_HOLD_DAYS, help="最大保有営業日数(デフォルト20)")
+    parser.add_argument(
+        "--portfolio",
+        type=str,
+        default="default",
+        help="戦略名。戦略ごとに状態ファイルを分離して並行検証する(例: aggressive)",
+    )
     args = parser.parse_args()
 
-    state = load_state()
+    path = state_file(args.portfolio)
+    state = load_state(path)
+    print(f"=== ポートフォリオ: {args.portfolio} ===")
 
     # 先に既存ポジションの判定を済ませてから新規エントリーする
     update_positions(state, args.tp, args.sl, args.max_hold)
@@ -281,9 +296,9 @@ def main() -> None:
     if args.enter:
         enter_position(state, args.enter.upper(), args.enter.upper(), None, "manual")
 
-    save_state(state, args.tp, args.sl, args.max_hold)
+    save_state(state, path, args.portfolio, args.tp, args.sl, args.max_hold)
     print_summary(state, args.tp, args.sl)
-    print(f"\n状態を {STATE_FILE} に保存しました。")
+    print(f"\n状態を {path} に保存しました。")
 
 
 if __name__ == "__main__":
