@@ -396,3 +396,64 @@ svg.viz { width: 100%; height: auto; display: block; }
   pointer-events: none;
   box-shadow: 0 4px 14px rgba(0,0,0,0.25);
 }
+
+/* ---- 仮想ポートフォリオ ---- */
+.tile-row-3 { grid-template-columns: 1fr 1fr 1fr; }
+.tile-value.delta-pos { color: var(--positive); }
+.tile-value.delta-neg { color: var(--negative); }
+.pf-heading { font-size: 12.5px; margin: 6px 0 0; color: var(--text-secondary); font-weight: 600; }
+.pf-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.pf-row-head { display: flex; align-items: baseline; gap: 8px; }
+.pf-ticker { font-weight: 700; font-size: 14px; }
+.pf-name {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-pnl { font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.pf-pnl.pos { color: var(--positive); }
+.pf-pnl.neg { color: var(--negative); }
+.pf-row-sub {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.pos-meter {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--viz-neg), var(--surface-sunken) 45%, var(--surface-sunken) 55%, var(--viz-pos));
+  opacity: 0.9;
+}
+.pos-meter-zero {
+  position: absolute;
+  top: -2px;
+  width: 1.5px;
+  height: 10px;
+  background: var(--viz-baseline);
+}
+.pos-meter-dot {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--surface);
+}
+.pos-meter-dot.pos { background: var(--viz-pos); }
+.pos-meter-dot.neg { background: var(--viz-neg); }
+td.pos { color: var(--positive); }
+td.neg { color: var(--negative); }

@@ -14,6 +14,8 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') daily_run start ====="
 # S&P 1500(大型500+中型400+小型600)から2段階スクリーニング
 # (テクニカル粗選別→フル評価)。中小型株も対象にするためsp1500を使う。
 "$PYTHON" screen.py --universe sp1500 --prefilter-top 50
+# 仮想ポートフォリオ: 既存ポジションの利確/損切り判定 + 当日上位3銘柄を仮想エントリー
+"$PYTHON" track_positions.py --auto-enter 3
 "$PYTHON" sync_report.py
 
 "$GIT" add docs/

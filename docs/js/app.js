@@ -562,6 +562,94 @@ function trendTable(series, tsList) {
   return html;
 }
 
+/** 仮想ポートフォリオ: SL⇄TPの間で現在値がどこにいるかのレンジメーター */
+function positionMeter(pnlPct, slPct, tpPct) {
+  // slPct(負)→0%、0→中央、tpPct→100%に線形マップ
+  const span = tpPct - slPct;
+  const ratio = Math.max(0, Math.min(1, (pnlPct - slPct) / span));
+  const zeroRatio = (0 - slPct) / span;
+  const cls = pnlPct >= 0 ? "pos" : "neg";
+  return `<div class="pos-meter" aria-hidden="true">
+    <div class="pos-meter-zero" style="left:${(zeroRatio * 100).toFixed(1)}%"></div>
+    <div class="pos-meter-dot ${cls}" style="left:${(ratio * 100).toFixed(1)}%"></div>
+  </div>`;
+}
+
+function portfolioSection(portfolio) {
+  const s = portfolio.stats || { trades: 0 };
+  const settings = portfolio.settings || {};
+  const tp = settings.tp_pct ?? 10;
+  const sl = settings.sl_pct ?? -7;
+  const positions = portfolio.positions || [];
+  const closed = [...(portfolio.closed || [])].reverse(); // 新しい順
+
+  let html = `<section class="chart-card">
+    <h2>仮想ポートフォリオ(ペーパートレード)</h2>
+    <p class="chart-note">上位銘柄を仮想購入した場合の検証。利確${tp > 0 ? "+" : ""}${tp}% / 損切り${sl}% / 最大${settings.max_hold_days ?? 20}営業日。実際の売買は行っていません</p>`;
+
+  // 成績タイル
+  if (s.trades > 0) {
+    html += `<div class="tile-row tile-row-3">
+      <div class="tile"><div class="tile-label">勝率</div>
+        <div class="tile-value">${s.win_rate_pct}<span class="tile-unit">%</span></div>
+        <div class="tile-sub">${s.trades}トレード</div></div>
+      <div class="tile"><div class="tile-label">平均損益</div>
+        <div class="tile-value ${s.avg_pnl_pct >= 0 ? "delta-pos" : "delta-neg"}">${s.avg_pnl_pct > 0 ? "+" : ""}${s.avg_pnl_pct}<span class="tile-unit">%</span></div>
+        <div class="tile-sub">勝ち${s.avg_win_pct ?? "-"}% / 負け${s.avg_loss_pct ?? "-"}%</div></div>
+      <div class="tile"><div class="tile-label">PF</div>
+        <div class="tile-value">${s.profit_factor ?? "-"}</div>
+        <div class="tile-sub">平均${s.avg_days_held ?? "-"}日保有</div></div>
+    </div>`;
+  } else {
+    html += `<p class="empty">クローズ済みトレードはまだありません。データが貯まると勝率・平均損益が表示されます。</p>`;
+  }
+
+  // 保有中
+  html += `<h3 class="pf-heading">保有中 (${positions.length})</h3>`;
+  if (positions.length === 0) {
+    html += `<p class="empty">保有中のポジションはありません。</p>`;
+  } else {
+    for (const p of positions) {
+      const pnl = p.current_pnl_pct;
+      const pnlS = pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "-";
+      html += `<div class="pf-row">
+        <div class="pf-row-head">
+          <span class="pf-ticker mono">${escapeHtml(p.ticker)}</span>
+          <span class="pf-name">${escapeHtml(p.name || "")}</span>
+          <span class="pf-pnl ${pnl >= 0 ? "pos" : "neg"}">${pnlS}</span>
+        </div>
+        ${pnl != null ? positionMeter(pnl, sl, tp) : ""}
+        <div class="pf-row-sub">
+          <span>SL ${sl}%</span>
+          <span>entry ${p.entry_price} (${escapeHtml(p.entered_at || "")}) ・ ${p.days_held ?? 0}日</span>
+          <span>TP +${tp}%</span>
+        </div>
+      </div>`;
+    }
+  }
+
+  // クローズ履歴(直近10件)
+  if (closed.length > 0) {
+    html += `<h3 class="pf-heading">クローズ履歴(直近${Math.min(10, closed.length)}件)</h3>
+    <div class="table-scroll"><table class="data-table"><thead>
+      <tr><th>銘柄</th><th>結果</th><th>損益</th><th>保有</th><th>決済日</th></tr></thead><tbody>`;
+    const reasonLabel = { tp: "利確", sl: "損切り", time: "時間切れ", manual: "手動" };
+    for (const t of closed.slice(0, 10)) {
+      html += `<tr>
+        <td class="mono">${escapeHtml(t.ticker)}</td>
+        <td>${reasonLabel[t.exit_reason] || escapeHtml(t.exit_reason)}</td>
+        <td class="${t.pnl_pct >= 0 ? "pos" : "neg"}">${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%</td>
+        <td>${t.days_held}日</td>
+        <td class="mono">${escapeHtml(t.closed_at || "")}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  html += `</section>`;
+  return html;
+}
+
 async function renderDashboard() {
   el("list-view").classList.add("hidden");
   el("detail-view").classList.add("hidden");
@@ -587,6 +675,14 @@ async function renderDashboard() {
   const latest = snapshots[snapshots.length - 1];
   const latestTop = (latest.snap.candidates || []).find((c) => c.rank === 1);
 
+  // 仮想ポートフォリオ(未同期なら無視)
+  let portfolio = null;
+  try {
+    portfolio = await fetchAndDecrypt(state.passphrase, "reports/portfolio.enc");
+  } catch (e) {
+    /* portfolio.encが無い環境では表示しない */
+  }
+
   let html = "";
 
   // KPIタイル
@@ -603,6 +699,11 @@ async function renderDashboard() {
       <div class="tile-sub">${latestTop ? `スコア ${latestTop.total_score.toFixed(1)} ・ ${esc(latestTop.name)}` : ""}</div>
     </div>
   </div>`;
+
+  // 仮想ポートフォリオ
+  if (portfolio) {
+    html += portfolioSection(portfolio);
+  }
 
   // 常連銘柄
   html += `<section class="chart-card">
