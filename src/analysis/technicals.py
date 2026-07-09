@@ -1,7 +1,8 @@
 """価格データからテクニカル指標を計算し0-100のスコアに変換する。
 
 入力は Date/Open/High/Low/Close/Volume を持つDataFrame。
-移動平均のトレンド・RSI・出来高の勢いを組み合わせたシンプルな設計。
+移動平均トレンド・対ベンチマーク相対強度・52週高値近接度・RSI・出来高を
+組み合わせたモメンタム寄りの設計。
 """
 from __future__ import annotations
 
@@ -21,8 +22,12 @@ def _rsi(close: pd.Series, period: int = 14) -> float:
     return 100 - (100 / (1 + rs))
 
 
-def score_technicals(df: pd.DataFrame) -> dict:
-    """スコアと内訳を返す。データ不足時はニュートラル(50)を返す。"""
+def score_technicals(df: pd.DataFrame, benchmark_df: pd.DataFrame | None = None) -> dict:
+    """スコアと内訳を返す。データ不足時はニュートラル(50)を返す。
+
+    benchmark_df(通常はSPY)を渡すと対ベンチマーク相対強度も加味する。
+    渡さない場合、相対強度は中立(50)として扱う。
+    """
     if df is None or df.empty or len(df) < 30:
         return {"score": 50.0, "detail": "価格データ不足"}
 
@@ -71,18 +76,49 @@ def score_technicals(df: pd.DataFrame) -> dict:
         vol_ratio = recent_vol / base_vol
         volume_score = max(0, min(100, 50 + (vol_ratio - 1) * 50))
 
+    # 対ベンチマーク相対強度: 直近60営業日の超過リターン。
+    # セクターローテーション判定(sector_rank.py)と同じ発想を個別銘柄にも適用する。
+    # 「市場全体が上げているから上がっている」銘柄と「市場より強い」銘柄を区別できる。
+    rs_score = 50.0
+    rs_available = False
+    if (
+        benchmark_df is not None
+        and not benchmark_df.empty
+        and len(close) >= 61
+        and len(benchmark_df) >= 61
+    ):
+        stock_ret = close.iloc[-1] / close.iloc[-61] - 1
+        bench_close = benchmark_df["Close"]
+        bench_ret = bench_close.iloc[-1] / bench_close.iloc[-61] - 1
+        excess_pct = (stock_ret - bench_ret) * 100
+        rs_score = max(0, min(100, 50 + excess_pct * 2))  # 超過±25%で飽和
+        rs_available = True
+
+    # 52週高値近接度: 高値更新圏の銘柄はモメンタム持続の実証研究が多い。
+    # データが1年に満たない場合は取得できた期間内の高値を使う。
+    high_window = min(len(close), 252)
+    period_high = close.tail(high_window).max()
+    high_score = 50.0
+    if period_high and period_high > 0:
+        proximity = close.iloc[-1] / period_high  # 1.0=高値ちょうど
+        # 高値から-30%以下で0点、高値で100点の線形
+        high_score = max(0, min(100, (proximity - 0.7) / 0.3 * 100))
+
     total = (
-        trend_score * 0.4
-        + rsi_score * 0.25
-        + volume_score * 0.2
-        + (50 + golden_cross_bonus) * 0.15
+        trend_score * 0.30
+        + rs_score * 0.20
+        + high_score * 0.15
+        + rsi_score * 0.15
+        + volume_score * 0.10
+        + (50 + golden_cross_bonus) * 0.10
     )
     total = round(max(0, min(100, total)), 1)
 
     return {
         "score": total,
         "detail": (
-            f"trend={trend_score:.0f} rsi={rsi_value:.0f} "
+            f"trend={trend_score:.0f} rs={rs_score:.0f}{'' if rs_available else '(中立)'} "
+            f"hi52={high_score:.0f} rsi={rsi_value:.0f} "
             f"volume={volume_score:.0f} cross_bonus={golden_cross_bonus:+.0f}"
         ),
     }

@@ -30,5 +30,12 @@ def test_news_score_reflects_positive_negative_balance():
         {"sentiment": "negative"},
         {"sentiment": "neutral"},
     ]
-    # (2 - 1) / 4 = 0.25 -> 50 + 0.25*50 = 62.5
-    assert news_score(headlines) == 62.5
+    # shrinkage: (2 - 1) / (4 + 4) = 0.125 -> 50 + 0.125*50 = 56.2
+    assert news_score(headlines) == 56.2
+
+
+def test_news_score_shrinks_small_samples_toward_neutral():
+    """同じ「全部ポジティブ」でも、見出しが少ないほど中立寄りになる。"""
+    few = [{"sentiment": "positive"}] * 2
+    many = [{"sentiment": "positive"}] * 16
+    assert 50.0 < news_score(few) < news_score(many)

@@ -78,12 +78,20 @@ def _rough_sentiment(title: str) -> str:
     return "neutral"
 
 
+SHRINKAGE_PRIOR = 4  # 「中立とみなす仮想見出し数」。少数サンプルの振れを抑える
+
+
 def news_score(headlines: list[dict]) -> float:
-    """見出しの簡易センチメントを0-100のスコアに変換する。"""
+    """見出しの簡易センチメントを0-100のスコアに変換する。
+
+    サンプル数が少ないと1本の見出しでスコアが大きく振れるため、
+    仮想的な中立見出しSHRINKAGE_PRIOR本を混ぜて中立方向に縮小する
+    (ベイズ的shrinkage)。見出しが多いほど実際のバランスに近づく。
+    """
     if not headlines:
         return 50.0
     pos = sum(1 for h in headlines if h["sentiment"] == "positive")
     neg = sum(1 for h in headlines if h["sentiment"] == "negative")
     total = len(headlines)
-    balance = (pos - neg) / total  # -1.0 ~ 1.0
+    balance = (pos - neg) / (total + SHRINKAGE_PRIOR)  # -1.0 ~ 1.0(縮小済み)
     return round(50 + balance * 50, 1)

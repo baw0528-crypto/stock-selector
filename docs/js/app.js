@@ -127,9 +127,11 @@ function modeBadge(entry) {
   return `${(entry.market || "us").toUpperCase()}通常`;
 }
 
-function completenessLabel(c) {
+function completenessLabel(c, scoreVersion) {
   const price = c.has_price_data ? "P" : "P✗";
-  return `${price} F${c.fundamental_metrics}/4 N${c.news_count}`;
+  // ファンダ指標の分母はスコアリングのバージョンで変わる(v1: 4指標, v2: 5指標)
+  const fundMax = (scoreVersion || 1) >= 2 ? 5 : 4;
+  return `${price} F${c.fundamental_metrics}/${fundMax} N${c.news_count}`;
 }
 
 /** Fable 5の出力(簡易的な#見出し・-箇条書きを含む)を最低限整形して表示する。 */
@@ -302,7 +304,7 @@ function buildDetailHtml(snapshot) {
       <td>${fmtNum(c.fundamental_score)}</td>
       <td>${fmtNum(c.technical_score)}</td>
       <td>${fmtNum(c.news_score)}</td>
-      <td class="mono small">${escapeHtml(completenessLabel(c))}</td>
+      <td class="mono small">${escapeHtml(completenessLabel(c, meta.score_version))}</td>
     </tr>`;
   }
   html += `</tbody></table></div>`;

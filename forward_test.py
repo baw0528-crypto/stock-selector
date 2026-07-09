@@ -47,6 +47,8 @@ def load_snapshots(output_dir: str = "output") -> list[dict]:
                 "file": path.name,
                 "date": data["meta"]["generated_at"][:10],
                 "weights": data["meta"].get("weights"),
+                # score_versionが無い古いスナップショットはv1(初期ロジック)とみなす
+                "score_version": data["meta"].get("score_version", 1),
                 "candidates": candidates,
             }
         )
@@ -168,6 +170,15 @@ def main():
         print("screen.py を実行するとJSONスナップショットが保存され、日を置いてから検証できます。")
         return
     print(f"スナップショット {len(snapshots)}本を読み込みました ({snapshots[0]['date']} 〜 {snapshots[-1]['date']})")
+
+    versions = sorted({s["score_version"] for s in snapshots})
+    if len(versions) > 1:
+        counts = {v: sum(1 for s in snapshots if s["score_version"] == v) for v in versions}
+        print(
+            f"[warn] スコアリングロジックの異なるバージョンが混在しています "
+            f"({', '.join(f'v{v}: {n}本' for v, n in counts.items())})。"
+        )
+        print("       相関の解釈時は注意してください。バージョン別に見たい場合はoutput/を分けて集計してください。")
 
     symbols = sorted({yf_symbol(c) for snap in snapshots for c in snap["candidates"]} | {BENCHMARK})
     start = min(snap["date"] for snap in snapshots)

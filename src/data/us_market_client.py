@@ -19,7 +19,8 @@ SP500_CACHE = Path("data_cache/sp500_tickers.json")
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 
-def get_price_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
+def get_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
+    """1銘柄の価格履歴を取得する。52週高値近接度の計算に1年分が要るためデフォルト1y。"""
     df = yf.Ticker(ticker).history(period=period)
     if df.empty:
         return df
@@ -27,7 +28,7 @@ def get_price_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
     return df[["Date", "Open", "High", "Low", "Close", "Volume"]]
 
 
-def get_price_histories(tickers: list[str], period: str = "6mo") -> dict[str, pd.DataFrame]:
+def get_price_histories(tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
     """複数銘柄の価格履歴を一括ダウンロードする。
 
     広いユニバース(S&P 500等)を1銘柄ずつ取得するとレート制限と
@@ -101,6 +102,7 @@ def fetch_fundamentals(ticker: str) -> dict:
 
     roe = _get("returnOnEquity")
     revenue_growth = _get("revenueGrowth")
+    earnings_growth = _get("earningsGrowth")
 
     return {
         "code": ticker,
@@ -108,9 +110,12 @@ def fetch_fundamentals(ticker: str) -> dict:
         "pbr": _get("priceToBook"),
         "roe": roe * 100 if roe is not None else None,
         "revenue_growth_pct": revenue_growth * 100 if revenue_growth is not None else None,
+        "earnings_growth_pct": earnings_growth * 100 if earnings_growth is not None else None,
         "profit_margin_pct": (
             _get("profitMargins") * 100 if _get("profitMargins") is not None else None
         ),
+        # yfinanceのdebtToEquityは%表記(例: 150.0 = 負債が自己資本の1.5倍)
+        "debt_to_equity_pct": _get("debtToEquity"),
         "market_cap": _get("marketCap"),
         "short_name": info.get("shortName"),
     }

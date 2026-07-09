@@ -39,6 +39,15 @@ def score_fundamentals(data: dict) -> dict:
         if per > 0:
             # PERが低いほど割安。15倍前後を中立、40倍超で減点。
             per_score = _clip(100 - (per - 10) * 2.5, 10, 90)
+            # 利益成長率が取れる場合はPEG(成長調整後PER)を加味する。
+            # 高成長銘柄は絶対PERだけ見ると一律「割高」になるが、
+            # 成長率対比では正当化されるケースがあるため半々でブレンドする。
+            eps_growth = data.get("earnings_growth_pct")
+            if eps_growth is not None and eps_growth > 0:
+                peg = per / eps_growth
+                # PEG 1.0前後を妥当、2.0で減速、3.0超で明確に割高の目安
+                peg_score = _clip(100 - (peg - 0.5) * 30, 10, 90)
+                per_score = (per_score + peg_score) / 2
             scores.append(per_score)
         else:
             # PERがマイナス = 赤字企業。単に指標を無視すると
@@ -49,6 +58,12 @@ def score_fundamentals(data: dict) -> dict:
     margin = data.get("profit_margin_pct")
     if margin is not None:
         scores.append(_clip(40 + margin * 1.5, 0, 90))
+
+    dte = data.get("debt_to_equity_pct")
+    if dte is not None and dte >= 0:
+        # 負債資本倍率(%)。50%以下は健全(80点)、100%で65点、200%で35点、
+        # 300%超は財務リスク大として頭打ちの低評価。
+        scores.append(_clip(95 - dte * 0.3, 5, 90))
 
     if not scores:
         return {"score": 50.0, "metrics_used": 0}

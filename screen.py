@@ -19,7 +19,7 @@ from src.data.news_client import build_us_query, fetch_headlines, news_score
 from src.data.sector_data import US_SECTOR_CONSTITUENTS, JP_SECTOR_CONSTITUENTS
 from src.analysis.fundamentals import score_fundamentals
 from src.analysis.technicals import score_technicals
-from src.analysis.scorer import CandidateScore, rank_candidates
+from src.analysis.scorer import CandidateScore, rank_candidates, SCORE_VERSION
 from src.analysis.sector_rank import rank_us_sectors, rank_jp_sectors, select_diverse_sectors
 from src.agent.fable_synthesis import generate_report
 
@@ -65,7 +65,22 @@ def build_jp_candidates(codes: list[str]) -> tuple[list[CandidateScore], dict]:
     return candidates, headlines_map
 
 
-def build_us_candidates(tickers: list[str]) -> tuple[list[CandidateScore], dict]:
+def _fetch_us_benchmark() -> "object":
+    """相対強度計算用のベンチマーク(SPY)価格を取得する。失敗時はNone(中立扱い)。"""
+    try:
+        df = us_market_client.get_price_history("SPY")
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] SPY(ベンチマーク)の取得に失敗。相対強度は中立扱いになります ({e})")
+    return None
+
+
+def build_us_candidates(
+    tickers: list[str], benchmark_df=None
+) -> tuple[list[CandidateScore], dict]:
+    if benchmark_df is None:
+        benchmark_df = _fetch_us_benchmark()
     candidates, headlines_map = [], {}
     for ticker in tickers:
         price_df, fundamentals = None, {}
@@ -84,7 +99,11 @@ def build_us_candidates(tickers: list[str]) -> tuple[list[CandidateScore], dict]
         headlines_map[ticker] = headlines
 
         has_price = price_df is not None and not price_df.empty
-        tech = score_technicals(price_df) if has_price else {"score": 50.0, "detail": "価格データなし"}
+        tech = (
+            score_technicals(price_df, benchmark_df=benchmark_df)
+            if has_price
+            else {"score": 50.0, "detail": "価格データなし"}
+        )
         fund = score_fundamentals(fundamentals)
         cand = CandidateScore(
             code=ticker,
@@ -112,19 +131,23 @@ def build_us_candidates_prefiltered(
     粗選別がテクニカル基準である点に注意(モメンタム寄りのバイアスが乗る)。
     """
     print(f"[1/2] {len(tickers)}銘柄の価格を一括取得し、テクニカルで上位{prefilter_top}銘柄に粗選別します...")
+    benchmark_df = _fetch_us_benchmark()
     price_map = us_market_client.get_price_histories(tickers)
     missing = len(tickers) - len(price_map)
     if missing:
         print(f"[info] 価格データを取得できなかった{missing}銘柄は粗選別の対象外です")
 
     scored = sorted(
-        ((t, score_technicals(df)["score"]) for t, df in price_map.items()),
+        (
+            (t, score_technicals(df, benchmark_df=benchmark_df)["score"])
+            for t, df in price_map.items()
+        ),
         key=lambda x: x[1],
         reverse=True,
     )
     survivors = [t for t, _ in scored[:prefilter_top]]
     print(f"[2/2] 上位{len(survivors)}銘柄をフル評価(ファンダ+ニュース)します...")
-    return build_us_candidates(survivors)
+    return build_us_candidates(survivors, benchmark_df=benchmark_df)
 
 
 def _candidate_to_dict(c: CandidateScore, rank: int | None = None) -> dict:
@@ -181,6 +204,7 @@ def main():
 
     run_meta = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "score_version": SCORE_VERSION,
         "market": args.market,
         "universe": args.universe,
         "sector_first": args.sector_first,

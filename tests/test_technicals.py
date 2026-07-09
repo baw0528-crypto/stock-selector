@@ -41,3 +41,32 @@ def test_rsi_rewards_strength_instead_of_penalizing_overbought():
     rsi = float(detail.split("rsi=")[1].split(" ")[0])
     assert trend > 50
     assert rsi > 50
+
+
+def test_relative_strength_rewards_outperformance():
+    """同じ銘柄でも、ベンチマークが弱いほど相対強度スコアが高くなる。"""
+    stock = _make_df([100 + i * 0.5 for i in range(90)])  # 強い上昇
+    flat_bench = _make_df([100.0] * 90)
+    strong_bench = _make_df([100 + i * 0.8 for i in range(90)])
+    vs_flat = score_technicals(stock, benchmark_df=flat_bench)
+    vs_strong = score_technicals(stock, benchmark_df=strong_bench)
+    assert vs_flat["score"] > vs_strong["score"]
+
+
+def test_relative_strength_neutral_without_benchmark():
+    closes = [100 + i * 0.5 for i in range(90)]
+    result = score_technicals(_make_df(closes))
+    assert "rs=50(中立)" in result["detail"]
+
+
+def test_52w_high_proximity_favors_stocks_near_high():
+    """高値圏の銘柄は、高値から大きく崩れた銘柄よりhi52スコアが高い。"""
+    near_high = [100 + i * 0.2 for i in range(120)]  # 単調上昇=常に高値圏
+    # 前半で高値を付けて後半で40%下落
+    off_high = [100 + i for i in range(60)] + [160 - i * 1.1 for i in range(60)]
+    near = score_technicals(_make_df(near_high))
+    off = score_technicals(_make_df(off_high))
+    hi_near = float(near["detail"].split("hi52=")[1].split(" ")[0])
+    hi_off = float(off["detail"].split("hi52=")[1].split(" ")[0])
+    assert hi_near > hi_off
+    assert hi_off == 0  # -30%超の下落は0点
