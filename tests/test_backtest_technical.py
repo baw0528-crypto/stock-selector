@@ -1,6 +1,6 @@
 import pandas as pd
 
-from backtest_technical import _to_bars, run_backtest
+from backtest_technical import _to_bars, run_backtest, analyze_quality
 
 
 def _make_price_df(days, start=100.0, drift=0.0, start_date="2024-01-01"):
@@ -60,3 +60,34 @@ def test_run_backtest_skips_ticker_missing_data_on_rebalance_date():
     )
     # LATEはWARMUP_BARS分の助走が無いリバランス日では選ばれ得ない
     assert all(t["ticker"] in ("FULL", "LATE") for t in trades)
+
+
+def test_trades_carry_quality_metadata_for_score_analysis():
+    """day_top_score等が記録され、選別力の事後検証に使えること。"""
+    days = 320
+    price_map = {
+        "A": _make_price_df(days, drift=0.4),
+        "B": _make_price_df(days, drift=0.2),
+        "C": _make_price_df(days, drift=0.0),
+    }
+    benchmark = _make_price_df(days, drift=0.0)
+    trades, _ = run_backtest(
+        price_map, benchmark, top_n=1, rebalance_days=20,
+        tp_pct=10, sl_pct=-7, max_hold_days=20,
+    )
+    assert len(trades) > 0
+    for t in trades:
+        assert t["entry_rank"] == 1
+        assert t["day_top_score"] is not None
+        assert t["day_n_candidates"] == 3
+        # top_n=1のときpick_spreadは1位のみなので0
+        assert t["day_pick_spread"] == 0
+        # 選外との差(1位-2位)は0以上のはず(スコア降順ソートのため)
+        assert t["day_cutoff_gap"] is None or t["day_cutoff_gap"] >= 0
+
+
+def test_analyze_quality_handles_small_samples_without_crashing(capsys):
+    trades = [{"pnl_pct": 1.0, "day_top_score": 70.0}]
+    analyze_quality(trades, "day_top_score", "テスト")
+    out = capsys.readouterr().out
+    assert "サンプル不足" in out

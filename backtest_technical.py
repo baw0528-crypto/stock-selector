@@ -31,6 +31,26 @@ from src.data import us_market_client
 from track_positions import compute_stats, evaluate_exit, DEFAULT_TP_PCT, DEFAULT_SL_PCT, DEFAULT_MAX_HOLD_DAYS
 
 WARMUP_BARS = 252  # 52週高値・MA75を安定させるための最低助走期間(約1年)
+ATR_PERIOD = 14
+
+
+def _atr_pct(df: pd.DataFrame, period: int = ATR_PERIOD) -> float | None:
+    """直近のATR(平均真の値幅)を終値に対する%で返す。ボラティリティの粗い指標。
+
+    値が高いほど値動きが荒く、損切りに一気に刺さりやすい銘柄とみなす。
+    """
+    if len(df) < period + 1:
+        return None
+    high, low, close = df["High"], df["Low"], df["Close"]
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+    atr = tr.rolling(period).mean().iloc[-1]
+    last_close = close.iloc[-1]
+    if pd.isna(atr) or not last_close:
+        return None
+    return float(atr / last_close * 100)
 
 
 def _to_bars(df: pd.DataFrame) -> list[dict]:
@@ -55,8 +75,13 @@ def run_backtest(
     tp_pct: float,
     sl_pct: float,
     max_hold_days: int,
+    max_atr_pct: float | None = None,
 ) -> tuple[list[dict], int]:
-    """リバランス日ごとに上位top_n銘柄を仮想エントリーし、クローズ済みトレード一覧を返す。"""
+    """リバランス日ごとに上位top_n銘柄を仮想エントリーし、クローズ済みトレード一覧を返す。
+
+    max_atr_pctを指定すると、ATR%(ボラティリティ)がそれを超える銘柄を
+    スコアリング対象から事前に除外する(値動きが荒すぎる銘柄を避ける粗いフィルタ)。
+    """
     bench_dates = benchmark_df["Date"].tolist()
     n_dates = len(bench_dates)
 
@@ -75,11 +100,28 @@ def run_backtest(
             if df["Date"].iloc[pos] != as_of_date:
                 continue  # この銘柄はこの日に取引データが無い(新規上場/欠損等)
             df_upto = df.iloc[: pos + 1]
+            atr_pct = _atr_pct(df_upto)
+            if max_atr_pct is not None and atr_pct is not None and atr_pct > max_atr_pct:
+                continue  # ボラティリティ過大として事前除外
             score = score_technicals(df_upto, benchmark_df=bench_upto)["score"]
-            scored.append((ticker, pos, score))
+            scored.append((ticker, pos, score, atr_pct))
 
         scored.sort(key=lambda x: x[2], reverse=True)
-        for ticker, pos, score in scored[:top_n]:
+
+        # スコアの「質」を見るための当日メタ情報。エントリー可否には使わず、
+        # 事後にトレードをこれらでバケット分けして選別力を検証するためだけに記録する。
+        day_top_score = scored[0][2] if scored else None
+        n_picks = min(top_n, len(scored))
+        day_pick_spread = (
+            round(scored[0][2] - scored[n_picks - 1][2], 2) if n_picks > 0 else None
+        )
+        day_cutoff_gap = (
+            round(scored[n_picks - 1][2] - scored[n_picks][2], 2)
+            if len(scored) > n_picks
+            else None
+        )
+
+        for rank, (ticker, pos, score, atr_pct) in enumerate(scored[:top_n], start=1):
             df = price_map[ticker]
             entry_price = float(df["Close"].iloc[pos])
             future_bars = _to_bars(df.iloc[pos + 1 : pos + 1 + max_hold_days + 5])
@@ -93,6 +135,12 @@ def run_backtest(
                     "entered_at": str(as_of_date)[:10],
                     "entry_price": round(entry_price, 4),
                     "score": round(score, 1),
+                    "entry_rank": rank,
+                    "entry_atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+                    "day_top_score": round(day_top_score, 1) if day_top_score is not None else None,
+                    "day_pick_spread": day_pick_spread,
+                    "day_cutoff_gap": day_cutoff_gap,
+                    "day_n_candidates": len(scored),
                     "closed_at": exit_info["exit_date"],
                     "exit_price": round(exit_info["exit_price"], 4),
                     "exit_reason": exit_info["exit_reason"],
@@ -102,6 +150,40 @@ def run_backtest(
             )
 
     return trades, len(list(rebalance_range))
+
+
+QUALITY_LABELS = ["下位1/3", "中位1/3", "上位1/3"]
+
+
+def analyze_quality(trades: list[dict], field: str, field_label: str) -> None:
+    """トレードをfield(day_top_score等)の3分位でバケット分けし、勝率/平均損益を比較する。
+
+    『スコアが本当に選別力を持っているか』の検証用。field値が無いトレードは除外する。
+    TP/SLのチューニングとは違い、エントリー可否の判断材料を探すための分析。
+    """
+    values = [t[field] for t in trades if t.get(field) is not None]
+    if len(values) < 9:  # 3分位に分けるには最低限のサンプルが要る
+        print(f"  ({field_label}: サンプル不足のため分析スキップ)")
+        return
+
+    df = pd.DataFrame([t for t in trades if t.get(field) is not None])
+    try:
+        df["bucket"] = pd.qcut(df[field], 3, labels=QUALITY_LABELS, duplicates="drop")
+    except ValueError:
+        print(f"  ({field_label}: 値のばらつきが小さく3分位に分割できません)")
+        return
+
+    print(f"\n  --- {field_label}で3分位 ---")
+    for label in QUALITY_LABELS:
+        g = df[df["bucket"] == label]
+        if g.empty:
+            continue
+        win_rate = (g["pnl_pct"] > 0).mean() * 100
+        print(
+            f"  {label}: {len(g)}件 / 勝率{win_rate:.1f}% / "
+            f"平均損益{g['pnl_pct'].mean():+.2f}% / {field_label}範囲 "
+            f"[{g[field].min():.1f}, {g[field].max():.1f}]"
+        )
 
 
 def main() -> None:
@@ -117,6 +199,10 @@ def main() -> None:
     parser.add_argument("--sl", type=float, default=DEFAULT_SL_PCT, help="損切りライン%%")
     parser.add_argument("--max-hold", type=int, default=DEFAULT_MAX_HOLD_DAYS, help="最大保有営業日数")
     parser.add_argument("--max-tickers", type=int, default=None, help="動作確認用にユニバースを先頭N銘柄に絞る")
+    parser.add_argument(
+        "--max-atr-pct", type=float, default=None,
+        help="ATR%%(ボラティリティ)がこれを超える銘柄を事前に除外する(例: 6.0)。未指定なら除外しない",
+    )
     args = parser.parse_args()
 
     tickers = us_market_client.get_universe_tickers(args.universe)
@@ -148,8 +234,11 @@ def main() -> None:
         f"毎回上位{args.top_n}銘柄をエントリー)..."
     )
     trades, n_rebalances = run_backtest(
-        price_map, benchmark_df, args.top_n, args.rebalance_days, args.tp, args.sl, args.max_hold
+        price_map, benchmark_df, args.top_n, args.rebalance_days, args.tp, args.sl, args.max_hold,
+        max_atr_pct=args.max_atr_pct,
     )
+    if args.max_atr_pct is not None:
+        print(f"ボラティリティフィルタ: ATR% > {args.max_atr_pct} の銘柄を除外")
 
     print(f"\nリバランス {n_rebalances}回 / トレード {len(trades)}件")
     print(
@@ -172,6 +261,12 @@ def main() -> None:
     if stats["profit_factor"] is not None:
         print(f"プロフィットファクター: {stats['profit_factor']}")
     print(f"平均保有: {stats['avg_days_held']}営業日 / 決済内訳: {stats['exit_reasons']}")
+
+    print("\n=== スコアの選別力の検証(エントリー条件のヒント探し、TP/SL調整ではない) ===")
+    analyze_quality(trades, "day_top_score", "その日の1位スコア")
+    analyze_quality(trades, "day_pick_spread", "上位内スプレッド(1位-最下位ピック)")
+    analyze_quality(trades, "day_cutoff_gap", "選外との差(最下位ピック-次点)")
+    analyze_quality(trades, "entry_atr_pct", "エントリー時ATR%(ボラティリティ)")
 
 
 if __name__ == "__main__":
