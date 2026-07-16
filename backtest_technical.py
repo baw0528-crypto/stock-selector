@@ -278,8 +278,11 @@ def main() -> None:
         help="同時保有できる上限銘柄数。埋まっている間は新規建てしない(参考記事の資金管理を模す)",
     )
     parser.add_argument(
-        "--market", choices=["us", "jp"], default="us",
-        help="us=S&P指数群 / jp=日経225(yfinance経由、財務データ不要のテクニカルのみなので利用可)",
+        "--market", choices=["us", "jp", "jp-growth"], default="us",
+        help=(
+            "us=S&P指数群 / jp=日経225(大型株) / jp-growth=東証グロース市場250"
+            "(小型成長株、sp600相当)。yfinance経由・財務データ不要のテクニカルのみなので利用可"
+        ),
     )
     args = parser.parse_args()
 
@@ -287,6 +290,10 @@ def main() -> None:
         tickers = [f"{code}.T" for code in us_market_client.get_nikkei225_tickers()]
         benchmark_symbol = "1321.T"  # 日経225連動型ETF(NEXT FUNDS)
         universe_label = "nikkei225"
+    elif args.market == "jp-growth":
+        tickers = [f"{code}.T" for code in us_market_client.get_tse_growth250_tickers()]
+        benchmark_symbol = "1321.T"  # 適切な専用ベンチマークが無いため日経225ETFで代用(参考値)
+        universe_label = "tse-growth250"
     else:
         tickers = us_market_client.get_universe_tickers(args.universe)
         benchmark_symbol = "SPY"

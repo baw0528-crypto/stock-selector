@@ -167,6 +167,49 @@ def get_nikkei225_tickers(max_age_days: int = 30) -> list[str]:
     return tickers
 
 
+TSE_GROWTH250_URL = "https://ja.wikipedia.org/wiki/東証グロース市場250指数"
+TSE_GROWTH250_CACHE = Path("data_cache/tse_growth250_tickers.json")
+
+
+def get_tse_growth250_tickers(max_age_days: int = 30) -> list[str]:
+    """東証グロース市場250指数の構成銘柄コードを取得する(小型成長株ユニバース)。
+
+    日経225(大型株)と対比するための日本の小型株ユニバース。米国のsp600
+    (S&P 600小型株)に相当する位置づけで、参考記事(小型株×モメンタム)の
+    対象像に近い。get_nikkei225_tickers()と同じくyfinance(`.T`)で
+    価格履歴のみ使うテクニカルバックテスト専用。
+    """
+    cached = None
+    if TSE_GROWTH250_CACHE.exists():
+        cached = json.loads(TSE_GROWTH250_CACHE.read_text())
+        age_days = (time.time() - cached["fetched_at"]) / 86400
+        if age_days < max_age_days:
+            return cached["tickers"]
+
+    try:
+        resp = requests.get(
+            TSE_GROWTH250_URL, headers={"User-Agent": "stock-selector/1.0"}, timeout=30
+        )
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
+        codes: list[str] = []
+        for t in tables:
+            if list(t.columns)[:2] == ["コード", "銘柄名"]:
+                codes += t["コード"].astype(str).tolist()
+        if len(codes) < 200:  # 250の大半が取れていなければページ構造変化とみなす
+            raise RuntimeError(f"想定より少ない({len(codes)}件)。ページ構造が変わった可能性")
+        tickers = list(dict.fromkeys(codes))
+    except Exception as e:  # noqa: BLE001
+        if cached:
+            print(f"[warn] 東証グロース250リストの更新に失敗。古いキャッシュを使います ({e})")
+            return cached["tickers"]
+        raise RuntimeError(f"東証グロース250構成銘柄リストの取得に失敗しました: {e}") from e
+
+    TSE_GROWTH250_CACHE.parent.mkdir(exist_ok=True)
+    TSE_GROWTH250_CACHE.write_text(json.dumps({"fetched_at": time.time(), "tickers": tickers}))
+    return tickers
+
+
 def fetch_earnings_info(ticker: str) -> Optional[dict]:
     """決算カレンダー情報を取得する。
 
