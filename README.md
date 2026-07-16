@@ -115,12 +115,24 @@ python track_positions.py --close NVDA     # 手動クローズ
 ```bash
 python backtest_technical.py --universe sp600 --years 2       # 小型株、過去2年
 python backtest_technical.py --universe sp600 --max-tickers 50  # 動作確認用に絞る
+python backtest_technical.py --market jp --years 2             # 日経225(実験的)
 ```
 
 一定間隔(既定5営業日=週次)のリバランス日ごとに、その時点までの価格データのみで
 テクニカルスコアを計算し(未来のデータは一切参照しない)、上位銘柄を仮想エントリー。
 利確/損切り/時間切れの判定は`track_positions.py`の`evaluate_exit()`と完全に同一
 ロジックを再利用しているため、ライブのペーパートレードと同じ物差しで比較できます。
+
+追加オプション: `--require-catalyst`(ギャップ上昇+出来高急増が確認できた銘柄のみ
+候補にする)、`--exit-style trailing`(固定利確の代わりに、含み益+1%確保後は
+高値からの下落率でトレーリングストップ)、`--max-atr-pct`(ボラティリティ過大な
+銘柄を除外)、`--min-day-score`/`--max-day-score`(その日の上位スコアで絞る)。
+
+**日本株について**: `--market jp`は日経225(Wikipediaから取得)をyfinance経由
+(`<証券コード>.T`)でテクニカルのみ検証します。財務データ(J-Quants無料プランの
+制約)を使わないため、この検証だけは実行できます。ただし米国株向けの改善が
+そのまま日本株に効くとは限らないことが分かっています(下記の実測値を参照)。
+`notes/DESIGN.md`の8.6に詳細と実測値を記載。
 
 ## フォワードテスト(スコアの事後検証)
 

@@ -71,6 +71,67 @@ def evaluate_exit(
     return None
 
 
+DEFAULT_TRAIL_START_PCT = 1.0  # ここまで含み益が乗ったらトレーリング開始(元記事の最低利益目標)
+DEFAULT_TRAIL_PCT = 5.0  # 高値からの許容下落幅(元記事のSL -5〜7%の中間)
+
+
+def evaluate_exit_trailing(
+    entry_price: float,
+    bars: list[dict],
+    trail_start_pct: float = DEFAULT_TRAIL_START_PCT,
+    trail_pct: float = DEFAULT_TRAIL_PCT,
+    initial_sl_pct: float = DEFAULT_SL_PCT,
+    max_hold_days: int = DEFAULT_MAX_HOLD_DAYS,
+) -> dict | None:
+    """固定利確ではなく「最低利益を確保したらトレーリングストップで伸ばす」方式。
+
+    参考記事(souzai.net)の設計を模したエグジット:
+    - 含み益がtrail_start_pct(既定+1%)に達するまでは、初期損切りinitial_sl_pct(既定-7%)のみで守る
+    - 達した後は、そこまでの高値からtrail_pct(既定5%)下落したら手仕舞う(利益を伸ばす)
+    - 上限(固定TP)は設けない。トレーリングに引っかかるか、時間切れまで持ち続ける
+
+    evaluate_exit()と同様、ギャップは寄り値で約定したとみなす。
+    """
+    initial_sl_price = entry_price * (1 + initial_sl_pct / 100)
+    trail_start_price = entry_price * (1 + trail_start_pct / 100)
+    peak_price = entry_price
+    trailing_active = False
+
+    for i, bar in enumerate(bars, start=1):
+        if not trailing_active:
+            # トレーリング開始前: 初期損切りのみで守る
+            if bar["open"] <= initial_sl_price:
+                return {
+                    "exit_price": bar["open"], "exit_reason": "sl",
+                    "exit_date": bar["date"], "days_held": i,
+                }
+            if bar["low"] <= initial_sl_price:
+                return {
+                    "exit_price": initial_sl_price, "exit_reason": "sl",
+                    "exit_date": bar["date"], "days_held": i,
+                }
+            peak_price = max(peak_price, bar["high"])
+            if peak_price >= trail_start_price:
+                trailing_active = True
+        else:
+            peak_price = max(peak_price, bar["high"])
+            stop_price = peak_price * (1 - trail_pct / 100)
+            if bar["open"] <= stop_price:
+                return {
+                    "exit_price": bar["open"], "exit_reason": "trail",
+                    "exit_date": bar["date"], "days_held": i,
+                }
+            if bar["low"] <= stop_price:
+                return {
+                    "exit_price": stop_price, "exit_reason": "trail",
+                    "exit_date": bar["date"], "days_held": i,
+                }
+
+        if i >= max_hold_days:
+            return {"exit_price": bar["close"], "exit_reason": "time", "exit_date": bar["date"], "days_held": i}
+    return None
+
+
 def compute_stats(closed: list[dict]) -> dict:
     """クローズ済みトレードから勝率などの成績を集計する。"""
     if not closed:

@@ -1,6 +1,6 @@
 import pytest
 
-from track_positions import evaluate_exit, compute_stats
+from track_positions import evaluate_exit, evaluate_exit_trailing, compute_stats
 
 
 def _bar(date, o, h, l, c):
@@ -66,6 +66,41 @@ def test_compute_stats_win_rate_and_profit_factor():
 
 def test_compute_stats_empty():
     assert compute_stats([]) == {"trades": 0}
+
+
+def test_trailing_exit_uses_initial_sl_before_reaching_profit_lock():
+    """含み益がtrail_start_pctに届く前は、固定の初期損切りだけで判定する。"""
+    bars = [_bar("2026-01-02", 100, 100.5, 92, 93)]  # SL -7%=93、寄りは変化なし
+    result = evaluate_exit_trailing(100.0, bars, trail_start_pct=1, trail_pct=5, initial_sl_pct=-7)
+    assert result["exit_reason"] == "sl"
+    assert result["exit_price"] == 93.0
+
+
+def test_trailing_exit_activates_after_profit_lock_and_trails_the_peak():
+    """+1%(101)に到達後は高値からtrail_pct%下がったら手仕舞う。固定TPは無い。"""
+    bars = [
+        _bar("2026-01-02", 100, 110, 100, 108),  # 高値110で+1%通過、トレーリング開始
+        _bar("2026-01-05", 108, 112, 107, 112),  # さらに高値更新112
+        _bar("2026-01-06", 112, 112, 105, 106),  # 高値112の-5%=106.4を下回り手仕舞い
+    ]
+    result = evaluate_exit_trailing(100.0, bars, trail_start_pct=1, trail_pct=5, initial_sl_pct=-7)
+    assert result["exit_reason"] == "trail"
+    assert result["exit_price"] == pytest.approx(112 * 0.95)
+    assert result["days_held"] == 3
+
+
+def test_trailing_exit_lets_winner_run_beyond_old_fixed_tp():
+    """固定+10%を超えても、トレーリングに触れなければ持ち続けられる。"""
+    bars = [_bar("2026-01-02", 100, 130, 128, 129)]  # +30%でもトレーリング未接触
+    result = evaluate_exit_trailing(100.0, bars, trail_start_pct=1, trail_pct=5, initial_sl_pct=-7)
+    assert result is None  # 保有継続(まだクローズしない)
+
+
+def test_trailing_exit_time_exit_still_applies():
+    bars = [_bar(f"2026-01-{d:02d}", 101, 102, 100.5, 101.5) for d in range(2, 25)]
+    result = evaluate_exit_trailing(100.0, bars, trail_start_pct=1, trail_pct=5, max_hold_days=5)
+    assert result["exit_reason"] == "time"
+    assert result["days_held"] == 5
 
 
 def test_enter_position_uses_snapshot_price_without_fetching():

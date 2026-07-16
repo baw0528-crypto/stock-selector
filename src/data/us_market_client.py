@@ -122,6 +122,51 @@ def get_sp500_tickers(max_age_days: int = 30) -> list[str]:
     return get_index_tickers("sp500", max_age_days=max_age_days)
 
 
+NIKKEI225_URL = "https://ja.wikipedia.org/wiki/日経平均株価"
+NIKKEI225_CACHE = Path("data_cache/nikkei225_tickers.json")
+
+
+def get_nikkei225_tickers(max_age_days: int = 30) -> list[str]:
+    """日経225構成銘柄の証券コードを取得する(4桁の証券コードのみ、`.T`は付けない)。
+
+    日本株の財務データ(J-Quants無料プラン)には制約があるが、テクニカル因子
+    だけのバックテスト(backtest_technical.py)なら価格履歴だけで完結し、
+    yfinanceは日本株を`<コード>.T`形式でそのまま取得できるため利用可能。
+    Wikipediaの日本語版ページはセクター別テーブル(証券コード/銘柄/備考)に
+    分かれているため、該当する全テーブルを連結して225銘柄を復元する。
+    """
+    cached = None
+    if NIKKEI225_CACHE.exists():
+        cached = json.loads(NIKKEI225_CACHE.read_text())
+        age_days = (time.time() - cached["fetched_at"]) / 86400
+        if age_days < max_age_days:
+            return cached["tickers"]
+
+    try:
+        resp = requests.get(
+            NIKKEI225_URL, headers={"User-Agent": "stock-selector/1.0"}, timeout=30
+        )
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
+        codes: list[str] = []
+        for t in tables:
+            cols = list(t.columns)[:3]
+            if cols == ["証券コード", "銘柄", "備考"]:
+                codes += t["証券コード"].astype(str).tolist()
+        if len(codes) < 200:  # 225の大半が取れていなければページ構造変化とみなす
+            raise RuntimeError(f"想定より少ない({len(codes)}件)。ページ構造が変わった可能性")
+        tickers = list(dict.fromkeys(codes))
+    except Exception as e:  # noqa: BLE001
+        if cached:
+            print(f"[warn] 日経225リストの更新に失敗。古いキャッシュを使います ({e})")
+            return cached["tickers"]
+        raise RuntimeError(f"日経225構成銘柄リストの取得に失敗しました: {e}") from e
+
+    NIKKEI225_CACHE.parent.mkdir(exist_ok=True)
+    NIKKEI225_CACHE.write_text(json.dumps({"fetched_at": time.time(), "tickers": tickers}))
+    return tickers
+
+
 def fetch_earnings_info(ticker: str) -> Optional[dict]:
     """決算カレンダー情報を取得する。
 

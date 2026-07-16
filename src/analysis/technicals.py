@@ -136,6 +136,7 @@ def score_technicals(df: pd.DataFrame, benchmark_df: pd.DataFrame | None = None)
 
     return {
         "score": total,
+        "gap_bonus": gap_bonus,  # >0ならギャップ上昇+出来高急増のカタリストを検知した日
         "detail": (
             f"trend={trend_score:.0f} rs={rs_score:.0f}{'' if rs_available else '(中立)'} "
             f"hi52={high_score:.0f} rsi={rsi_value:.0f} "
