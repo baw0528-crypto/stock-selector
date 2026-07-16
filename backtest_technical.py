@@ -89,6 +89,7 @@ def run_backtest(
     exit_style: str = "fixed",
     trail_start_pct: float = DEFAULT_TRAIL_START_PCT,
     trail_pct: float = DEFAULT_TRAIL_PCT,
+    max_concurrent: int | None = None,
 ) -> tuple[list[dict], int]:
     """リバランス日ごとに上位top_n銘柄を仮想エントリーし、クローズ済みトレード一覧を返す。
 
@@ -101,19 +102,38 @@ def run_backtest(
 
     exit_style="trailing"にすると、固定利確ではなく最低利益ロック+
     トレーリングストップ(evaluate_exit_trailing)を使う。
+
+    max_concurrentを指定すると「同時保有N銘柄まで、空きが出るまで新規建てしない」
+    という資金管理の規律を模す。指定しない場合は毎回機械的にtop_n件を新規建てする
+    (参考記事の『3銘柄まで、埋まっていたら待つ』という規律との違いが今回の論点)。
     """
     bench_dates = benchmark_df["Date"].tolist()
     n_dates = len(bench_dates)
 
     rebalance_range = range(WARMUP_BARS, n_dates - max_hold_days - 1, rebalance_days)
     trades: list[dict] = []
+    open_positions: list[dict] = []  # max_concurrent管理用: {ticker, exit_date}
 
     for step, idx in enumerate(rebalance_range, start=1):
         as_of_date = bench_dates[idx]
+        as_of_str = str(as_of_date)[:10]
         bench_upto = benchmark_df.iloc[: idx + 1]
+
+        if max_concurrent is not None:
+            # この日までにクローズした分を解放してから、空き枠と入りたい銘柄数を決める
+            open_positions = [p for p in open_positions if p["exit_date"] > as_of_str]
+            available_slots = max_concurrent - len(open_positions)
+            if available_slots <= 0:
+                continue  # 枠が埋まっているのでこの日はノートレード
+            held_tickers = {p["ticker"] for p in open_positions}
+        else:
+            available_slots = top_n
+            held_tickers = set()
 
         scored = []
         for ticker, df in price_map.items():
+            if ticker in held_tickers:
+                continue  # 既に保有中なら新規に数えない(ナンピン厳禁)
             pos = df["Date"].searchsorted(as_of_date, side="right") - 1
             if pos < WARMUP_BARS or pos >= len(df) - max_hold_days:
                 continue
@@ -129,11 +149,12 @@ def run_backtest(
             scored.append((ticker, pos, tech["score"], atr_pct))
 
         scored.sort(key=lambda x: x[2], reverse=True)
+        n_take = min(top_n, available_slots)
 
         # スコアの「質」を見るための当日メタ情報。エントリー可否には使わず、
         # 事後にトレードをこれらでバケット分けして選別力を検証するためだけに記録する。
         day_top_score = scored[0][2] if scored else None
-        n_picks = min(top_n, len(scored))
+        n_picks = min(n_take, len(scored))
         day_pick_spread = (
             round(scored[0][2] - scored[n_picks - 1][2], 2) if n_picks > 0 else None
         )
@@ -143,7 +164,7 @@ def run_backtest(
             else None
         )
 
-        for rank, (ticker, pos, score, atr_pct) in enumerate(scored[:top_n], start=1):
+        for rank, (ticker, pos, score, atr_pct) in enumerate(scored[:n_take], start=1):
             df = price_map[ticker]
             entry_price = float(df["Close"].iloc[pos])
             # トレーリングは含み益を伸ばす設計なので保有が長引くことがあるため、
@@ -157,6 +178,8 @@ def run_backtest(
                 exit_info = evaluate_exit(entry_price, future_bars, tp_pct, sl_pct, max_hold_days)
             if exit_info is None:
                 continue  # データ不足で判定できなかった(まれ)
+            if max_concurrent is not None:
+                open_positions.append({"ticker": ticker, "exit_date": exit_info["exit_date"]})
             pnl = (exit_info["exit_price"] / entry_price - 1) * 100
             trades.append(
                 {
@@ -251,6 +274,10 @@ def main() -> None:
     parser.add_argument("--trail-start", type=float, default=DEFAULT_TRAIL_START_PCT, help="トレーリング開始の含み益ライン%%")
     parser.add_argument("--trail-pct", type=float, default=DEFAULT_TRAIL_PCT, help="高値からの許容下落幅%%")
     parser.add_argument(
+        "--max-concurrent", type=int, default=None,
+        help="同時保有できる上限銘柄数。埋まっている間は新規建てしない(参考記事の資金管理を模す)",
+    )
+    parser.add_argument(
         "--market", choices=["us", "jp"], default="us",
         help="us=S&P指数群 / jp=日経225(yfinance経由、財務データ不要のテクニカルのみなので利用可)",
     )
@@ -298,9 +325,12 @@ def main() -> None:
         exit_style=args.exit_style,
         trail_start_pct=args.trail_start,
         trail_pct=args.trail_pct,
+        max_concurrent=args.max_concurrent,
     )
     if args.max_atr_pct is not None:
         print(f"ボラティリティフィルタ: ATR% > {args.max_atr_pct} の銘柄を除外")
+    if args.max_concurrent is not None:
+        print(f"同時保有上限: {args.max_concurrent}銘柄(空きが出るまで新規建てなし)")
     if args.require_catalyst:
         print("カタリストゲート: ギャップ上昇+出来高急増が無い銘柄は候補外(参考記事の『好材料直後』を模す)")
 

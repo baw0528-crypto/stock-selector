@@ -91,3 +91,35 @@ def test_analyze_quality_handles_small_samples_without_crashing(capsys):
     analyze_quality(trades, "day_top_score", "テスト")
     out = capsys.readouterr().out
     assert "サンプル不足" in out
+
+
+def test_max_concurrent_skips_entries_when_slots_are_full():
+    """空き枠が無い日は新規建てせず、埋まっている間はノートレードになる。"""
+    days = 320
+    # 5銘柄とも同程度の強いトレンド。max_hold=20と長く保有させ、枠不足を起こしやすくする
+    price_map = {f"T{i}": _make_price_df(days, drift=0.3 + i * 0.01) for i in range(5)}
+    benchmark = _make_price_df(days, drift=0.0)
+
+    trades_uncapped, n_rebalances = run_backtest(
+        price_map, benchmark, top_n=3, rebalance_days=5,
+        tp_pct=10, sl_pct=-7, max_hold_days=20,
+    )
+    trades_capped, _ = run_backtest(
+        price_map, benchmark, top_n=3, rebalance_days=5,
+        tp_pct=10, sl_pct=-7, max_hold_days=20, max_concurrent=3,
+    )
+    # 上限を付けると、毎回機械的に3件建てる場合より新規エントリー数が減るはず
+    assert len(trades_capped) < len(trades_uncapped)
+
+    # どの時点でも同時保有数が3を超えていないことを確認
+    from collections import Counter
+    open_count = Counter()
+    events = []
+    for t in trades_capped:
+        events.append((t["entered_at"], 1))
+        events.append((t["closed_at"], -1))
+    events.sort()
+    running = 0
+    for _, delta in events:
+        running += delta
+        assert running <= 3
