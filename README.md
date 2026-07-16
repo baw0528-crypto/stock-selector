@@ -9,7 +9,8 @@
 > 日本株関連のコード(`jquants_client.py`等)も残していますが、現状は
 > 米国株に対象を絞って運用する方針にしたため、デフォルトでは使いません。
 > `--market jp` / `--market both` で呼び出せば動きますが、日本のセクターETF
-> コードは未検証なので優先度は低いです。
+> コードは未検証なので優先度は低いです。J-Quants自体(V2 API・ポイントインタイム
+> 財務データ)は実データで動作検証済み(`notes/DESIGN.md`の8.9参照)。
 
 ## できること
 
@@ -27,11 +28,15 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# .env を開いて JQUANTS_MAIL / JQUANTS_PASSWORD / ANTHROPIC_API_KEY を入れる
+# .env を開いて JQUANTS_API_KEY / ANTHROPIC_API_KEY を入れる
 ```
 
-J-Quants APIは https://jpx-jquants.com/ で無料登録できます（無料プランでも
-株価・基本財務は取得可能。詳細な財務指標はスタンダード以上が必要）。
+J-Quants APIは https://jpx-jquants.com/ で無料登録後、
+https://jpx-jquants.com/dashboard/api-keys でAPIキーを発行できます
+(V2 APIはAPIキー認証。メール/パスワードでの認証は廃止済み)。
+無料プランは株価・財務サマリーとも「直近12週間を除く過去2年分」が取得可能
+(詳細なBS/PL/CFはスタンダード以上が必要)。当日データが取れないためライブの
+銘柄選定には使えませんが、それより前の期間のバックテスト・検証には十分です。
 
 ## 使い方
 
