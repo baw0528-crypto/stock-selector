@@ -1,3 +1,5 @@
+from unittest.mock import patch, MagicMock
+
 import pytest
 
 from src.data.jquants_client import JQuantsClient
@@ -62,10 +64,11 @@ def test_revenue_growth_none_without_prior_fy_actual_in_history():
     assert result["revenue_growth_pct"] is None
 
 
-def test_normalize_statement_computes_roe():
+def test_normalize_statement_computes_roe_and_profit_margin():
     client = JQuantsClient(api_key="test-key")
     result = client._normalize_statement(_stmt("2025-08-08"), "1234")
     assert result["roe"] == 10.0  # 5,000,000 / 50,000,000 * 100
+    assert result["profit_margin_pct"] == 5.0  # 5,000,000 / 100,000,000 * 100
     assert result["disclosed_date"] == "2025-08-08"
 
 
@@ -98,3 +101,34 @@ def test_fetch_fundamentals_as_of_no_disclosure_yet_returns_empty():
 
     result = client.fetch_fundamentals_as_of("1234", "2025-01-01", price=1500.0)
     assert result == {}
+
+
+def _resp(status_code, data=None, headers=None):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = headers or {}
+    resp.json.return_value = {"data": data or [], "pagination_key": None}
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+    return resp
+
+
+def test_get_retries_on_429_then_succeeds():
+    """無料プランで多銘柄連続取得時に429が頻発することを確認済み。再試行で救えることの検証。"""
+    client = JQuantsClient(api_key="test-key")
+    responses = [_resp(429), _resp(429), _resp(200, data=[{"Code": "1234"}])]
+    with patch("src.data.jquants_client.requests.get", side_effect=responses) as mock_get, \
+         patch("src.data.jquants_client.time.sleep") as mock_sleep:
+        result = client._get("/fins/summary", {"code": "1234"})
+    assert result == [{"Code": "1234"}]
+    assert mock_get.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+def test_get_respects_retry_after_header():
+    client = JQuantsClient(api_key="test-key")
+    responses = [_resp(429, headers={"Retry-After": "3"}), _resp(200, data=[])]
+    with patch("src.data.jquants_client.requests.get", side_effect=responses), \
+         patch("src.data.jquants_client.time.sleep") as mock_sleep:
+        client._get("/fins/summary", {"code": "1234"})
+    mock_sleep.assert_called_once_with(3.0)

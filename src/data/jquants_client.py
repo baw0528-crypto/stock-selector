@@ -32,7 +32,13 @@ class JQuantsClient:
         self.api_key = api_key or os.getenv("JQUANTS_API_KEY")
 
     def _get(self, path: str, params: dict) -> list[dict]:
-        """ページネーションを自動で辿り、data配列を全部連結して返す。"""
+        """ページネーションを自動で辿り、data配列を全部連結して返す。
+
+        無料プランは短時間の大量リクエストで429(レート制限)を返してくる
+        (多銘柄を連続取得するバックテストの前処理で頻発を確認)。
+        Retry-Afterヘッダがあればそれに従い、無ければ指数バックオフで
+        最大5回まで再試行する。
+        """
         if not self.api_key:
             raise RuntimeError(
                 "JQUANTS_API_KEY が設定されていません。.env を確認してください"
@@ -41,13 +47,19 @@ class JQuantsClient:
         results: list[dict] = []
         query = dict(params)
         while True:
-            resp = requests.get(
-                f"{BASE_URL}{path}",
-                headers={"x-api-key": self.api_key},
-                params=query,
-                timeout=20,
-            )
-            resp.raise_for_status()
+            for attempt in range(5):
+                resp = requests.get(
+                    f"{BASE_URL}{path}",
+                    headers={"x-api-key": self.api_key},
+                    params=query,
+                    timeout=20,
+                )
+                if resp.status_code == 429 and attempt < 4:
+                    wait = float(resp.headers.get("Retry-After", 2 ** attempt))
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                break
             body = resp.json()
             results += body.get("data", [])
             pagination_key = body.get("pagination_key")
@@ -143,9 +155,13 @@ class JQuantsClient:
         bps = _to_float("BPS")
         profit = _to_float("NP")
         equity = _to_float("Eq")
+        revenue = _to_float("Sales")
         forecast_revenue = _to_float("FSales")
 
         roe = (profit / equity * 100) if profit and equity else None
+        # 利益率は同一開示内のNP/Salesなので期間基準が揃っており、増収率のような
+        # 通期予想 vs 四半期累計のズレは起きない
+        profit_margin = (profit / revenue * 100) if profit is not None and revenue else None
 
         prior_fy_revenue = None
         if history:
@@ -165,6 +181,7 @@ class JQuantsClient:
             "bps": bps,
             "roe": roe,
             "revenue_growth_pct": revenue_growth,
+            "profit_margin_pct": profit_margin,
             "disclosed_date": stmt.get("DiscDate"),
         }
 
